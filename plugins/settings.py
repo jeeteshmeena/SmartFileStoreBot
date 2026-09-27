@@ -43,6 +43,35 @@ async def _ask(bot, user_id: int, timeout: int = 300):
 
 from pyrogram import ContinuePropagation
 
+async def _send_or_edit_fast(query, text, buttons, bot=None, msg=None):
+    """
+    Instantaneous (<50ms) MTProto message updater for settings UI.
+    Replaces slow Bot API HTTP requests that cause severe lag, 400 errors, and freeze.
+    """
+    markup = InlineKeyboardMarkup(buttons)
+    target_msg = msg or getattr(query, 'message', None)
+    if target_msg:
+        try:
+            await target_msg.edit_text(text, reply_markup=markup)
+            return True
+        except Exception as e:
+            err_str = str(e).lower()
+            if "message is not modified" in err_str:
+                return True
+            try:
+                await target_msg.delete()
+            except Exception:
+                pass
+    client = bot or getattr(query, '_client', None)
+    chat_id = getattr(getattr(target_msg, 'chat', None), 'id', None) or getattr(getattr(query, 'from_user', None), 'id', None)
+    if client and chat_id:
+        try:
+            await client.send_message(chat_id=chat_id, text=text, reply_markup=markup)
+            return True
+        except Exception:
+            pass
+    return False
+
 async def _sb_set_text_flow(bot, user_id, query, b_id: str, key: str,
                              label: str, instructions: str, back_cb: str):
     """Reusable helper: prompt user for a per-bot text, then save it."""
@@ -373,10 +402,7 @@ async def owners_cb(bot, query):
             "<b><u>👑 Owner / Admin Control Panel</u></b>\n\n"
             f"<b>Primary Owners:</b> {len(primary)}  |  <b>Co-Owners:</b> {len(co)}\n\n"
             f"<b>Global User Limits:</b>\n"
-            f"  Live Jobs: <code>{limits.get('max_live_jobs', 65)}</code>  "
-            f"Multi Jobs: <code>{limits.get('max_multi_jobs', 2)}</code>\n"
-            f"  Merge Jobs: <code>{limits.get('max_merge_jobs', 1)}</code>  "
-            f"Accounts: <code>{limits.get('max_accounts', 2)}</code>\n\n"
+            f"  Accounts: <code>{limits.get('max_accounts', 2)}</code>\n\n"
             "<b>Feature Controls & Workers:</b>\n"
             + ("  Disabled: " + ", ".join(FEATURE_LABELS.get(f, f) for f in disabled) if disabled else "  All features currently enabled.")
             + "\n\n<i>Co-owners have FULL backend admin control. Only primary owners can add/remove other owners.</i>"
@@ -428,8 +454,8 @@ async def owners_cb(bot, query):
         limits = await db.get_global_user_limits()
         ask = await bot.send_message(uid, 
             "<b>⚙️ Set Global User Limits</b>\n\n"
-            f"Current: Live={limits.get('max_live_jobs',65)} Multi={limits.get('max_multi_jobs',2)} Merge={limits.get('max_merge_jobs',1)} Accounts={limits.get('max_accounts',2)}\n\n"
-            "Send in format: <code>live=5 multi=3 merge=2 accounts=4</code>\n"
+            f"Current: Accounts={limits.get('max_accounts',2)}\n\n"
+            "Send in format: <code>accounts=4</code>\n"
             "Use -1 for unlimited.\n/cancel to abort.")
         try:
             resp = await _ask(bot, uid, timeout=120)
@@ -439,8 +465,7 @@ async def owners_cb(bot, query):
                 return await ask.edit_text("Cancelled.",
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="settings#owners")]]))
             import re as _re
-            kmap = {'live': 'max_live_jobs', 'multi': 'max_multi_jobs',
-                    'merge': 'max_merge_jobs', 'accounts': 'max_accounts'}
+            kmap = {'accounts': 'max_accounts'}
             updates = {}
             for k, dbk in kmap.items():
                 m = _re.search(rf'{k}\s*=\s*(-?\d+)', txt, _re.I)
@@ -451,7 +476,7 @@ async def owners_cb(bot, query):
                 await ask.edit_text(f"✅ Global limits updated: {updates}",
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="settings#owners")]]))
             else:
-                await ask.edit_text("No valid values found. Format: live=5 multi=3",
+                await ask.edit_text("No valid values found. Format: accounts=4",
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="settings#owners")]]))
         except asyncio.TimeoutError:
             await ask.edit_text("Timeout.",
@@ -461,7 +486,7 @@ async def owners_cb(bot, query):
         await query.message.delete()
         ask = await bot.send_message(uid,
             "<b>🔧 Set User-Specific Limits</b>\n\n"
-            "Send: <code>USER_ID live=3 multi=2 merge=1 accounts=2</code>\n"
+            "Send: <code>USER_ID accounts=2</code>\n"
             "Use -1 for unlimited. Use /reset USER_ID to reset to global limits.\n"
             "/cancel to abort.")
         try:
@@ -484,8 +509,7 @@ async def owners_cb(bot, query):
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="settings#owners")]]))
             target_uid = int(parts[0])
             rest = parts[1] if len(parts) > 1 else ""
-            kmap2 = {'live': 'max_live_jobs', 'multi': 'max_multi_jobs',
-                     'merge': 'max_merge_jobs', 'accounts': 'max_accounts'}
+            kmap2 = {'accounts': 'max_accounts'}
             updates2 = {}
             for k2, dbk2 in kmap2.items():
                 m2 = _re2.search(rf'{k2}\s*=\s*(-?\d+)', rest, _re2.I)
@@ -508,6 +532,9 @@ async def settings_query(bot, query):
   except Exception:
       pass
   user_id = query.from_user.id
+  old_fut = _settings_waiting.pop(user_id, None)
+  if old_fut and not old_fut.done():
+      old_fut.cancel()
   i, type = query.data.split("#")
 
   # Strict security guard: only owners/co-owners can configure share bots & rate limit/pass
@@ -540,7 +567,7 @@ async def settings_query(bot, query):
           
   elif type=="stats":
      # Find active Live Jobs (which forward messages) for all accounts of this user
-     running_jobs = [j async for j in db.db.jobs.find({"user_id": user_id, "status": "running"})]
+     running_jobs = [j async for j in db.db["live_batch_jobs"].find({"user_id": user_id, "status": "running"})]
      bots = await db.get_bots(user_id)
      
      # Group jobs by account_id
@@ -556,7 +583,7 @@ async def settings_query(bot, query):
              default_group.append(j)
              
      lines = [
-         "<b>📊 ❪ Lɪᴠᴇ Jᴏʙs Sᴛᴀᴛs ❫</b>\n",
+         "<b>📊 ❪ Bᴀᴛᴄʜ Lɪɴᴋs Sᴛᴀᴛs ❫</b>\n",
          f"Total Active Jobs: <code>{len(running_jobs)}</code>\n",
          "────────────────────"
      ]
@@ -1026,19 +1053,7 @@ async def settings_query(bot, query):
          f"────────────────────\n"
          f"<b>Allocated Bots:</b> <code>{len(bots)}/10</code>"
      )
-     from plugins.share_bot import send_or_edit_with_custom_icons
-     sent_ok = await send_or_edit_with_custom_icons(
-         client=bot,
-         chat_id=query.message.chat.id,
-         text=text,
-         inline_keyboard=api_buttons,
-         message_id=query.message.id
-     )
-     if not sent_ok:
-         try:
-             await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
-         except Exception:
-             pass
+     await _send_or_edit_fast(query, text, buttons, bot=bot)
 
   elif type == "sharebotprotect":
      protect = await db.get_share_protect_global()
@@ -1090,19 +1105,7 @@ async def settings_query(bot, query):
         f"After <b>{max_strikes} strikes</b> the user is <b>silently auto-banned</b> with no message sent. "
         f"Owners, co-owners, and whitelisted users are always exempt regardless of this setting.</blockquote>"
     )
-    from plugins.share_bot import send_or_edit_with_custom_icons
-    sent_ok = await send_or_edit_with_custom_icons(
-        client=bot,
-        chat_id=query.message.chat.id,
-        text=text,
-        inline_keyboard=api_buttons,
-        message_id=query.message.id
-    )
-    if not sent_ok:
-        try:
-            await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
-        except Exception:
-            pass
+    await _send_or_edit_fast(query, text, buttons, bot=bot)
 
   elif type == "sb_abuse_toggle":
     abuse_cfg = await db.get_anti_abuse_config()
@@ -1292,29 +1295,18 @@ async def settings_query(bot, query):
         f'<emoji id="6021789619257874157">🔢</emoji> <b>Free User Limit:-</b> <code>{max_limit} links | {win_verbose}</code>\n'
         f'<emoji id="6023843687367190257">📋</emoji> <b>Purchase Logs:-</b> <code>{pass_log_str}</code>\n'
         f'<emoji id="6021435576513730578">👑</emoji> <b>Pass Plans:-</b> {pricing_str}\n\n'
-        f'<emoji id="5904462880941545555">💰</emoji> <b>Pass Revenue & Sales Analytics:</b>\n'
+        f'<emoji id="5904462880941545555">💰</emoji> <b>Pass Revenue & Sales Analytics (IST):</b>\n'
         f"────────────────────\n"
         f'<emoji id="5807800879553715710">📈</emoji> <b>Total Sales:</b> <code>{tot_sales} passes</code> | <b>Total Revenue:</b> <code>₹{tot_rev:.2f}</code>\n'
-        f'<emoji id="6034898821517940846">⏰</emoji> <b>Today\'s Sales:</b> <code>{today_sales} passes</code> | <b>Today\'s Revenue:</b> <code>₹{today_rev:.2f}</code>\n'
+        f'<emoji id="6034898821517940846">⏰</emoji> <b>Today\'s Sales (IST):</b> <code>{today_sales} passes</code> | <b>Today\'s Revenue:</b> <code>₹{today_rev:.2f}</code>\n'
+        f'<emoji id="6034973034257848185">⏳</emoji> <b>24H Revenue (Rolling):</b> <code>₹{sales_stats.get("last24h_revenue", 0.0):.2f}</code> ({sales_stats.get("last24h_sales", 0)} passes)\n'
         f'<emoji id="6021435576513730578">👑</emoji> <b>Tiers Sold:</b> <emoji id="5890925363067886150">⚡</emoji> Basic: {b_sales} | <emoji id="5805553606635559688">👑</emoji> Pro: {p_sales}\n'
         f'<emoji id="6032594876506312598">👥</emoji> <b>Active Customers:</b> <code>{active_cust} / {total_cust}</code>\n'
         f"────────────────────\n"
         f'<emoji id="5904359114531675993">💳</emoji> <b>Gateways:-</b> UPI: {upi_status} | Cashfree: {cf_status} | OxaPay: {oxa_status}'
     )
 
-    from plugins.share_bot import send_or_edit_with_custom_icons
-    sent_ok = await send_or_edit_with_custom_icons(
-        client=bot,
-        chat_id=query.message.chat.id,
-        text=body_text,
-        inline_keyboard=api_buttons,
-        message_id=query.message.id
-    )
-    if not sent_ok:
-        try:
-            await query.message.edit_text(body_text, reply_markup=InlineKeyboardMarkup(buttons))
-        except Exception:
-            pass
+    await _send_or_edit_fast(query, body_text, buttons, bot=bot)
 
   elif type == "sb_rl_uiver_menu":
     rl_cfg = await db.get_delivery_rate_limit_config()
@@ -1372,19 +1364,7 @@ async def settings_query(bot, query):
         f"• <b>Version 3 (Tiered: Basic / Pro / Premium):</b>\n"
         f"  User chooses tier (Basic, Pro with No FSub, Premium with Storyfi/Arya perks) then selects plan with instant gateway and payment switcher.</blockquote>"
     )
-    from plugins.share_bot import send_or_edit_with_custom_icons
-    sent_ok = await send_or_edit_with_custom_icons(
-        client=bot,
-        chat_id=query.message.chat.id,
-        text=uiver_text,
-        inline_keyboard=uiver_api_buttons,
-        message_id=query.message.id
-    )
-    if not sent_ok:
-        try:
-            await query.message.edit_text(uiver_text, reply_markup=InlineKeyboardMarkup(uiver_buttons))
-        except Exception:
-            pass
+    await _send_or_edit_fast(query, uiver_text, uiver_buttons, bot=bot)
 
   elif type == "sb_rl_set_v1":
     await db.set_delivery_rate_limit_config(pass_ui_version='v1')
@@ -1710,19 +1690,7 @@ async def settings_query(bot, query):
         [{"text": "Manage Plan Visibility", "callback_data": "settings#sb_rl_toggle_plans_menu", "icon_custom_emoji_id": "6034898821517940846"}],
         [{"text": "Back", "callback_data": "settings#sb_ratelimit"}],
     ]
-    from plugins.share_bot import send_or_edit_with_custom_icons
-    sent_ok = await send_or_edit_with_custom_icons(
-        client=bot,
-        chat_id=query.message.chat.id,
-        text=text,
-        inline_keyboard=api_buttons,
-        message_id=query.message.id
-    )
-    if not sent_ok:
-        try:
-            await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
-        except Exception:
-            pass
+    await _send_or_edit_fast(query, text, buttons, bot=bot)
 
   elif type in ("sb_rl_edit_prices_basic", "sb_rl_edit_prices_pro"):
     await query.message.delete()
@@ -1812,19 +1780,7 @@ async def settings_query(bot, query):
         f"• <b>Hidden:</b> Hidden from users during checkout.\n"
         f"────────────────────"
     )
-    from plugins.share_bot import send_or_edit_with_custom_icons
-    sent_ok = await send_or_edit_with_custom_icons(
-        client=bot,
-        chat_id=query.message.chat.id,
-        text=text,
-        inline_keyboard=api_buttons,
-        message_id=query.message.id
-    )
-    if not sent_ok:
-        try:
-            await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
-        except Exception:
-            pass
+    await _send_or_edit_fast(query, text, buttons, bot=bot)
 
   elif type.startswith("sb_rl_togplan_"):
     plan_key = type.replace("sb_rl_togplan_", "").strip()
@@ -1875,19 +1831,7 @@ async def settings_query(bot, query):
         f'<emoji id="5283232570660634549">⚡</emoji> <b>Cashfree:-</b> {cf_status}\n'
         f'<emoji id="5800720664620961831">🌐</emoji> <b>Crypto:-</b> {oxa_status}'
     )
-    from plugins.share_bot import send_or_edit_with_custom_icons
-    sent_ok = await send_or_edit_with_custom_icons(
-        client=bot,
-        chat_id=query.message.chat.id,
-        text=pay_text,
-        inline_keyboard=pay_api_buttons,
-        message_id=query.message.id
-    )
-    if not sent_ok:
-        try:
-            await query.message.edit_text(pay_text, reply_markup=InlineKeyboardMarkup(pay_buttons))
-        except Exception:
-            pass
+    await _send_or_edit_fast(query, pay_text, pay_buttons, bot=bot)
 
   elif type == "sb_rl_cf_menu":
     from plugins.cashfree_helper import get_cashfree_credentials
@@ -1925,19 +1869,7 @@ async def settings_query(bot, query):
         f"2. Go to <b>Payment Gateway → Developers → API Keys</b>\n"
         f"3. Copy your <b>App ID</b> and <b>Secret Key</b> and set them here or in <code>.env</code>.</blockquote>"
     )
-    from plugins.share_bot import send_or_edit_with_custom_icons
-    sent_ok = await send_or_edit_with_custom_icons(
-        client=bot,
-        chat_id=query.message.chat.id,
-        text=cf_text,
-        inline_keyboard=api_buttons,
-        message_id=query.message.id
-    )
-    if not sent_ok:
-        try:
-            await query.message.edit_text(cf_text, reply_markup=InlineKeyboardMarkup(buttons))
-        except Exception:
-            pass
+    await _send_or_edit_fast(query, cf_text, buttons, bot=bot)
 
   elif type == "sb_rl_cf_appid":
     await query.message.delete()
@@ -2054,19 +1986,7 @@ async def settings_query(bot, query):
         f"• <b>Automated (Gmail):</b> User enters UTR or system checks Gmail IMAP for transaction emails and verifies automatically within 15 seconds.\n"
         f"• <b>Manual (Screenshot):</b> User sends payment screenshot in Delivery Bot within 5 minutes. Admin receives notification in Main Bot with Approve & Decline buttons!</blockquote>"
     )
-    from plugins.share_bot import send_or_edit_with_custom_icons
-    sent_ok = await send_or_edit_with_custom_icons(
-        client=bot,
-        chat_id=query.message.chat.id,
-        text=upi_text,
-        inline_keyboard=api_buttons,
-        message_id=query.message.id
-    )
-    if not sent_ok:
-        try:
-            await query.message.edit_text(upi_text, reply_markup=InlineKeyboardMarkup(buttons))
-        except Exception:
-            pass
+    await _send_or_edit_fast(query, upi_text, buttons, bot=bot)
 
   elif type == "sb_rl_upi_toggle":
     rl_cfg = await db.get_delivery_rate_limit_config()
@@ -2203,19 +2123,7 @@ async def settings_query(bot, query):
         f"<b>Environment:</b> <code>{env_str}</code>\n"
         f"<b>Status:</b> {oxa_status_str}"
     )
-    from plugins.share_bot import send_or_edit_with_custom_icons
-    sent_ok = await send_or_edit_with_custom_icons(
-        client=bot,
-        chat_id=query.message.chat.id,
-        text=oxa_text,
-        inline_keyboard=api_buttons,
-        message_id=query.message.id
-    )
-    if not sent_ok:
-        try:
-            await query.message.edit_text(oxa_text, reply_markup=InlineKeyboardMarkup(buttons))
-        except Exception:
-            pass
+    await _send_or_edit_fast(query, oxa_text, buttons, bot=bot)
 
   elif type == "sb_rl_oxa_key":
     await query.message.delete()
@@ -2311,55 +2219,78 @@ async def settings_query(bot, query):
         "────────────────────"
     )
 
-    from plugins.share_bot import send_or_edit_with_custom_icons
-    sent_ok = await send_or_edit_with_custom_icons(
-        client=bot,
-        chat_id=query.message.chat.id,
-        text=text,
-        inline_keyboard=api_buttons,
-        message_id=query.message.id
-    )
-    if not sent_ok:
-        try:
-            await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
-        except Exception:
-            pass
+    await _send_or_edit_fast(query, text, buttons, bot=bot)
 
   elif type == "sb_rl_add_cust":
     prompt_text = (
         '<emoji id="5882207227997066107">➕</emoji> <b>Grant / Add Customer Pass</b>\n\n'
-        "Please send the <b>Telegram User ID</b> of the customer (e.g. <code>123456789</code>):\n"
-        "<i>Or send /cancel to abort.</i>"
+        "Please send the <b>Telegram User ID</b> or <b>@username</b> of the customer:\n\n"
+        "<i>You can also forward any message from the customer here.\n"
+        "Send /cancel to abort.</i>"
     )
     cancel_btn = [[InlineKeyboardButton("Back", callback_data="settings#sb_rl_cust_0")]]
     msg = await query.message.edit_text(prompt_text, reply_markup=InlineKeyboardMarkup(cancel_btn))
-    resp = await _ask(bot, user_id, timeout=120)
-    if not resp or resp.text.strip() == "/cancel":
+    try:
+        resp = await _ask(bot, user_id, timeout=120)
+    except asyncio.TimeoutError:
+        resp = None
+
+    if not resp:
         query.data = "settings#sb_rl_cust_0"
         return await settings_query(bot, query)
 
-    raw_input = resp.text.strip()
     target_uid = None
     u_name = ""
-    if raw_input.isdigit() or (raw_input.startswith("-") and raw_input[1:].isdigit()):
-        target_uid = int(raw_input)
-        try:
-            chat_obj = await bot.get_chat(target_uid)
-            u_name = chat_obj.first_name or f"User {target_uid}"
-        except Exception:
-            u_name = f"User {target_uid}"
+
+    # Check if forwarded from user
+    fwd_user = getattr(resp, 'forward_from', None)
+    if fwd_user and getattr(fwd_user, 'id', None):
+        target_uid = fwd_user.id
+        u_name = fwd_user.first_name or f"User {target_uid}"
     else:
-        # Username lookup
-        username_query = raw_input if raw_input.startswith("@") else f"@{raw_input}"
-        try:
-            chat_obj = await bot.get_chat(username_query)
-            target_uid = chat_obj.id
-            u_name = chat_obj.first_name or username_query
-        except Exception:
-            target_uid = None
+        raw_text = (getattr(resp, 'text', '') or '').strip()
+        if not raw_text or '/cancel' in raw_text.lower():
+            try: await resp.delete()
+            except Exception: pass
+            query.data = "settings#sb_rl_cust_0"
+            return await settings_query(bot, query)
+
+        # Extract from link if present
+        import re
+        id_match = re.search(r'(?:tg://user\?id=|user_id=)(\d+)', raw_text)
+        if id_match:
+            target_uid = int(id_match.group(1))
+        elif raw_text.isdigit() or (raw_text.startswith("-") and raw_text[1:].isdigit()):
+            target_uid = int(raw_text)
+        else:
+            un_match = re.search(r'(?:t\.me/|@)([a-zA-Z0-9_]{3,})', raw_text)
+            clean_username = un_match.group(1) if un_match else raw_text.lstrip('@').strip()
+            # Try finding user in database first
+            u_doc = await db.col.find_one({'username': {'$regex': f"^{re.escape(clean_username)}$", '$options': 'i'}})
+            if u_doc and u_doc.get('id'):
+                target_uid = int(u_doc['id'])
+                u_name = u_doc.get('name') or f"@{clean_username}"
+            else:
+                try:
+                    chat_obj = await bot.get_chat(f"@{clean_username}")
+                    target_uid = chat_obj.id
+                    u_name = chat_obj.first_name or f"@{clean_username}"
+                except Exception:
+                    target_uid = None
+
+    if target_uid and not u_name:
+        u_doc = await db.col.find_one({'id': target_uid})
+        if u_doc and u_doc.get('name'):
+            u_name = u_doc['name']
+        else:
+            try:
+                chat_obj = await bot.get_chat(target_uid)
+                u_name = chat_obj.first_name or f"User {target_uid}"
+            except Exception:
+                u_name = f"User {target_uid}"
 
     if not target_uid:
-        try: await resp.reply_text("❌ Invalid User ID or Username. Please send a valid numeric Telegram ID (e.g. <code>123456789</code>) or @username.", quote=True)
+        try: await resp.reply_text("❌ Could not resolve user. Please send a numeric Telegram User ID (e.g. <code>123456789</code>) or @username.", quote=True)
         except Exception: pass
         query.data = "settings#sb_rl_cust_0"
         return await settings_query(bot, query)
@@ -2367,7 +2298,6 @@ async def settings_query(bot, query):
     try: await resp.delete()
     except Exception: pass
 
-    # Step 1: Select Plan Tier (Basic or Pro)
     tier_text = (
         f'<emoji id="5805553606635559688">👑</emoji> <b>Select Plan Tier For Customer</b>\n\n'
         f"• <b>Name:</b> {u_name}\n"
@@ -2383,31 +2313,18 @@ async def settings_query(bot, query):
         ],
         [InlineKeyboardButton("Back", callback_data="settings#sb_rl_cust_0")]
     ]
-    api_tier_buttons = [
-        [
-            {"text": "Basic Pass", "callback_data": f"settings#sb_rl_gtier_{target_uid}_basic", "icon_custom_emoji_id": "5890925363067886150"},
-            {"text": "Pro Pass", "callback_data": f"settings#sb_rl_gtier_{target_uid}_pro", "icon_custom_emoji_id": "5805553606635559688"}
-        ],
-        [{"text": "Back", "callback_data": "settings#sb_rl_cust_0"}]
-    ]
-    from plugins.share_bot import send_or_edit_with_custom_icons
-    sent_ok = await send_or_edit_with_custom_icons(
-        client=bot,
-        chat_id=user_id,
-        text=tier_text,
-        inline_keyboard=api_tier_buttons,
-        message_id=msg.id if msg else None
-    )
-    if not sent_ok:
-        try: await msg.edit_text(tier_text, reply_markup=InlineKeyboardMarkup(tier_buttons))
-        except Exception: await bot.send_message(user_id, tier_text, reply_markup=InlineKeyboardMarkup(tier_buttons))
+    await _send_or_edit_fast(query, tier_text, tier_buttons, bot=bot, msg=msg)
 
   elif type.startswith("sb_rl_gtierselect_"):
     target_uid = int(type.split('_')[-1])
     u_name = f"User {target_uid}"
     try:
-        chat_obj = await bot.get_chat(target_uid)
-        u_name = chat_obj.first_name or u_name
+        u_doc = await db.col.find_one({'id': target_uid})
+        if u_doc and u_doc.get('name'):
+            u_name = u_doc['name']
+        else:
+            chat_obj = await bot.get_chat(target_uid)
+            u_name = chat_obj.first_name or u_name
     except Exception:
         pass
 
@@ -2426,36 +2343,23 @@ async def settings_query(bot, query):
         ],
         [InlineKeyboardButton("Back", callback_data="settings#sb_rl_cust_0")]
     ]
-    api_tier_buttons = [
-        [
-            {"text": "Basic Pass", "callback_data": f"settings#sb_rl_gtier_{target_uid}_basic", "icon_custom_emoji_id": "5890925363067886150"},
-            {"text": "Pro Pass", "callback_data": f"settings#sb_rl_gtier_{target_uid}_pro", "icon_custom_emoji_id": "5805553606635559688"}
-        ],
-        [{"text": "Back", "callback_data": "settings#sb_rl_cust_0"}]
-    ]
-    from plugins.share_bot import send_or_edit_with_custom_icons
-    sent_ok = await send_or_edit_with_custom_icons(
-        client=bot,
-        chat_id=query.message.chat.id,
-        text=tier_text,
-        inline_keyboard=api_tier_buttons,
-        message_id=query.message.id
-    )
-    if not sent_ok:
-        try: await query.message.edit_text(tier_text, reply_markup=InlineKeyboardMarkup(tier_buttons))
-        except Exception: pass
+    await _send_or_edit_fast(query, tier_text, tier_buttons, bot=bot)
 
   elif type.startswith("sb_rl_gtier_"):
     parts = type.split('_')
     target_uid = int(parts[3])
     tier = parts[4].lower().strip()
 
-    u_name = ""
+    u_name = f"User {target_uid}"
     try:
-        chat_obj = await bot.get_chat(target_uid)
-        u_name = chat_obj.first_name or f"User {target_uid}"
+        u_doc = await db.col.find_one({'id': target_uid})
+        if u_doc and u_doc.get('name'):
+            u_name = u_doc['name']
+        else:
+            chat_obj = await bot.get_chat(target_uid)
+            u_name = chat_obj.first_name or u_name
     except Exception:
-        u_name = f"User {target_uid}"
+        pass
 
     tier_label = '<emoji id="5805553606635559688">👑</emoji> PRO PASS' if tier == 'pro' else ('<emoji id="6156730271858169904">💎</emoji> PREMIUM PASS' if tier == 'premium' else '<emoji id="5890925363067886150">⚡</emoji> BASIC PASS')
     dur_text = (
@@ -2485,38 +2389,7 @@ async def settings_query(bot, query):
             InlineKeyboardButton("Back", callback_data="settings#sb_rl_cust_0")
         ]
     ]
-    api_dur_buttons = [
-        [
-            {"text": "1 Day", "callback_data": f"settings#sb_rl_gdur_{target_uid}_{tier}_1d", "icon_custom_emoji_id": "5882207227997066107"},
-            {"text": "3 Days", "callback_data": f"settings#sb_rl_gdur_{target_uid}_{tier}_3d", "icon_custom_emoji_id": "5882207227997066107"}
-        ],
-        [
-            {"text": "7 Days", "callback_data": f"settings#sb_rl_gdur_{target_uid}_{tier}_7d", "icon_custom_emoji_id": "5882207227997066107"},
-            {"text": "1 Month", "callback_data": f"settings#sb_rl_gdur_{target_uid}_{tier}_1mo", "icon_custom_emoji_id": "5882207227997066107"}
-        ],
-        [
-            {"text": "6 Months", "callback_data": f"settings#sb_rl_gdur_{target_uid}_{tier}_6mo", "icon_custom_emoji_id": "5882207227997066107"},
-            {"text": "1 Year", "callback_data": f"settings#sb_rl_gdur_{target_uid}_{tier}_365d", "icon_custom_emoji_id": "5882207227997066107"}
-        ],
-        [
-            {"text": "Custom Duration", "callback_data": f"settings#sb_rl_cgdur_{target_uid}_{tier}", "icon_custom_emoji_id": "6030400221232501136"}
-        ],
-        [
-            {"text": "Change Tier", "callback_data": f"settings#sb_rl_gtierselect_{target_uid}"},
-            {"text": "Back", "callback_data": "settings#sb_rl_cust_0"}
-        ]
-    ]
-    from plugins.share_bot import send_or_edit_with_custom_icons
-    sent_ok = await send_or_edit_with_custom_icons(
-        client=bot,
-        chat_id=query.message.chat.id,
-        text=dur_text,
-        inline_keyboard=api_dur_buttons,
-        message_id=query.message.id
-    )
-    if not sent_ok:
-        try: await query.message.edit_text(dur_text, reply_markup=InlineKeyboardMarkup(dur_buttons))
-        except Exception: pass
+    await _send_or_edit_fast(query, dur_text, dur_buttons, bot=bot)
 
   elif type.startswith("sb_rl_cgdur_"):
     parts = type.split('_')
@@ -2524,33 +2397,45 @@ async def settings_query(bot, query):
     tier = parts[4].lower().strip()
     uid = query.from_user.id
 
+    cancel_btn = [[InlineKeyboardButton("Back", callback_data=f"settings#sb_rl_gtier_{target_uid}_{tier}")]]
     ask_msg = await query.message.reply_text(
         f"✍️ <b>Custom Pass Duration ({tier.upper()}):</b>\n\n"
-        f"Send the duration for user <code>{target_uid}</code> (e.g. <code>30m</code>, <code>2h</code>, <code>12h</code>, <code>5d</code>, <code>15d</code>, <code>30d</code>):\n\n"
-        "<i>Or send /cancel to cancel.</i>"
+        f"Send the duration for user <code>{target_uid}</code> (e.g. <code>30m</code>, <code>2h</code>, <code>12h</code>, <code>5d</code>, <code>15d</code>, <code>30d</code>, <code>1mo</code>):\n\n"
+        "<i>Or send /cancel to cancel.</i>",
+        reply_markup=InlineKeyboardMarkup(cancel_btn)
     )
-    resp = await _ask(bot, uid, timeout=120)
+    try:
+        resp = await _ask(bot, uid, timeout=120)
+    except asyncio.TimeoutError:
+        resp = None
+
     try: await ask_msg.delete()
     except Exception: pass
 
-    if not resp or resp.text.startswith("/cancel"):
+    if not resp or not getattr(resp, 'text', None) or resp.text.strip().startswith("/cancel"):
         try: await query.answer("Cancelled.", show_alert=True)
         except Exception: pass
         query.data = f"settings#sb_rl_gtier_{target_uid}_{tier}"
         return await settings_query(bot, query)
 
-    custom_dur = resp.text.strip()
+    custom_dur = resp.text.strip().lower()
+    try: await resp.delete()
+    except Exception: pass
+
     try:
         from database import parse_duration_to_seconds
         sec = parse_duration_to_seconds(custom_dur, default_unit='d')
         if sec <= 0: raise ValueError()
     except Exception:
-        try: await query.message.reply_text("❌ Invalid duration format. Example formats: <code>30m</code>, <code>2h</code>, <code>1d</code>, <code>7d</code>")
+        err_msg = await query.message.reply_text("❌ Invalid duration format. Example formats: <code>30m</code>, <code>2h</code>, <code>1d</code>, <code>7d</code>, <code>15d</code>, <code>30d</code>")
+        await asyncio.sleep(2.5)
+        try: await err_msg.delete()
         except Exception: pass
         query.data = f"settings#sb_rl_gtier_{target_uid}_{tier}"
         return await settings_query(bot, query)
 
-    query.data = f"settings#sb_rl_gdur_{target_uid}_{tier}_{custom_dur}"
+    dur_key = custom_dur.replace(" ", "")
+    query.data = f"settings#sb_rl_gdur_{target_uid}_{tier}_{dur_key}"
     return await settings_query(bot, query)
 
   elif type.startswith("sb_rl_gdur_"):
@@ -2558,17 +2443,21 @@ async def settings_query(bot, query):
     target_uid = int(parts[3])
     if len(parts) >= 6:
         tier = parts[4].lower().strip()
-        dur = parts[5]
+        dur = '_'.join(parts[5:]).replace(" ", "")
     else:
         tier = "basic"
-        dur = parts[4]
+        dur = parts[4].replace(" ", "")
 
-    u_name = ""
+    u_name = f"User {target_uid}"
     try:
-        chat_obj = await bot.get_chat(target_uid)
-        u_name = chat_obj.first_name or f"User {target_uid}"
+        u_doc = await db.col.find_one({'id': target_uid})
+        if u_doc and u_doc.get('name'):
+            u_name = u_doc['name']
+        else:
+            chat_obj = await bot.get_chat(target_uid)
+            u_name = chat_obj.first_name or u_name
     except Exception:
-        u_name = f"User {target_uid}"
+        pass
 
     admin_id = query.from_user.id if query.from_user else 0
     admin_name = query.from_user.first_name if query.from_user else f"Admin {admin_id}"
@@ -2601,7 +2490,7 @@ async def settings_query(bot, query):
     except Exception:
         pass
 
-    # Send activation success message to user via Delivery Bot
+    # Send activation success message to user in background (never blocks admin UI)
     dur_verb = dur
     try:
         from database import parse_duration_to_seconds, format_duration_verbose
@@ -2617,26 +2506,23 @@ async def settings_query(bot, query):
         f'• <b>Status:</b> <emoji id="5411359377904934337">✅</emoji> <b>Active & Ready</b>\n\n'
         f'<blockquote><emoji id="5850176641803753392">🎉</emoji> <i>ᴛʜᴀɴᴋ ʏᴏᴜ! ʏᴏᴜʀ ᴜɴʟɪᴍɪᴛᴇᴅ ᴀᴄᴄᴇꜱꜱ ᴘᴀꜱꜱ ʜᴀꜱ ʙᴇᴇɴ ᴀᴄᴛɪᴠᴀᴛᴇᴅ. ᴇɴᴊᴏʏ ᴜɴʟɪᴍɪᴛᴇᴅ ɪɴꜱᴛᴀɴᴛ ᴅᴏᴡɴʟᴏᴀᴅꜱ ᴡɪᴛʜ ᴢᴇʀᴏ ʟɪᴍɪᴛꜱ!</i></blockquote>'
     )
-    sent = False
-    try:
-        from plugins.share_bot import share_clients
-        if share_clients:
-            for s_client in list(share_clients.values()):
-                try:
-                    await s_client.send_message(chat_id=target_uid, text=cust_msg)
-                    sent = True
-                    break
-                except Exception:
-                    pass
-    except Exception:
-        pass
-    if not sent:
+    async def _async_notify_customer(uid, msg_content):
         try:
-            await bot.send_message(chat_id=target_uid, text=cust_msg)
+            from plugins.share_bot import share_clients
+            if share_clients:
+                for s_client in list(share_clients.values()):
+                    try:
+                        await asyncio.wait_for(s_client.send_message(chat_id=uid, text=msg_content), timeout=2.5)
+                        return
+                    except Exception:
+                        pass
+            await asyncio.wait_for(bot.send_message(chat_id=uid, text=msg_content), timeout=2.5)
         except Exception:
             pass
 
-    # Send log to configured payment log channel
+    asyncio.create_task(_async_notify_customer(target_uid, cust_msg))
+
+    # Send log to configured payment log channel in background
     try:
         rl_cfg = await db.get_delivery_rate_limit_config()
         log_ch = rl_cfg.get('log_channel')
@@ -2652,10 +2538,10 @@ async def settings_query(bot, query):
             gateway=f"Admin Manual Grant ({admin_info})",
             tier=tier
         ))
-    except Exception as l_err:
+    except Exception:
         pass
 
-    try: await query.answer(f"✅ {tier.upper()} Pass granted to {u_name} for {dur} & user notified!", show_alert=True)
+    try: await query.answer(f"✅ {tier.upper()} Pass granted to {u_name} for {dur}!", show_alert=True)
     except Exception: pass
     query.data = f"settings#sb_rl_u_{target_uid}_0"
     return await settings_query(bot, query)
@@ -2698,24 +2584,18 @@ async def settings_query(bot, query):
     expires_at = pass_info.get('expires_at', 0)
 
     import datetime
-    try:
-        import pytz
-        ist_tz = pytz.timezone('Asia/Kolkata')
-    except Exception:
-        ist_tz = None
+    ist_tz = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
 
-    def format_dt(ts: float, show_ist: bool = True) -> str:
+    def format_dt(ts, show_ist: bool = True) -> str:
         if not ts or ts <= 0:
             return "N/A"
         try:
-            if ist_tz:
-                dt = datetime.datetime.fromtimestamp(ts, tz=ist_tz)
+            if isinstance(ts, datetime.datetime):
+                dt = ts if ts.tzinfo else ts.replace(tzinfo=datetime.timezone.utc)
+                dt = dt.astimezone(ist_tz)
             else:
-                dt = datetime.datetime.fromtimestamp(ts)
-            if show_ist:
-                return dt.strftime('%d/%m/%Y | %I:%M %p IST')
-            else:
-                return dt.strftime('%d/%m/%Y | %I:%M %p')
+                dt = datetime.datetime.fromtimestamp(float(ts), tz=ist_tz)
+            return dt.strftime('%d/%m/%Y | %I:%M %p IST')
         except Exception:
             return "N/A"
 
@@ -2723,7 +2603,7 @@ async def settings_query(bot, query):
     joined_str = format_dt(joined_ts, show_ist=True)
 
     first_buy_ts = details.get('first_buy_ts')
-    first_buy_str = format_dt(first_buy_ts, show_ist=False) if first_buy_ts else "No Purchases Yet"
+    first_buy_str = format_dt(first_buy_ts, show_ist=True) if first_buy_ts else "No Purchases Yet"
 
     lang_code = details.get('language', 'en')
     lang_display = "Hindi (हिन्दी)" if lang_code == 'hi' else "English"
@@ -2787,7 +2667,7 @@ async def settings_query(bot, query):
         for i, txn in enumerate(current_txns, 1):
             global_idx = (txn_page * per_page) + i
             t_time = txn.get('time', 0)
-            t_str = format_dt(t_time, show_ist=False)
+            t_str = format_dt(t_time, show_ist=True)
             
             p_name = str(txn.get('plan') or 'Pass')
             dur_verb = p_name
@@ -2948,25 +2828,7 @@ async def settings_query(bot, query):
         {"text": "Back", "callback_data": f"settings#sb_rl_cust_{page}"}
     ])
 
-    from plugins.share_bot import send_or_edit_with_custom_icons
-    sent_ok = await send_or_edit_with_custom_icons(
-        client=bot,
-        chat_id=query.message.chat.id,
-        text=body,
-        inline_keyboard=api_buttons,
-        message_id=query.message.id
-    )
-    if not sent_ok:
-        try:
-            await query.message.edit_text(body, reply_markup=InlineKeyboardMarkup(buttons))
-        except Exception as ex:
-            try:
-                await query.message.edit_text(
-                    f"<b>👤 CUSTOMER PROFILE</b>\n\n<b>ID:</b> <code>{cust_uid}</code>\n<b>Name:</b> {name}\n\n{sub_status}",
-                    reply_markup=InlineKeyboardMarkup(buttons)
-                )
-            except Exception:
-                pass
+    await _send_or_edit_fast(query, body, buttons, bot=bot)
 
   elif type.startswith("sb_rl_settier_"):
     parts = type.split('_')
@@ -2988,24 +2850,7 @@ async def settings_query(bot, query):
         ],
         [InlineKeyboardButton("Back", callback_data=f"settings#sb_rl_u_{cust_uid}_{page}")]
     ]
-    api_st_buttons = [
-        [
-            {"text": "Switch to Basic", "callback_data": f"settings#sb_rl_dotier_{cust_uid}_{page}_basic", "icon_custom_emoji_id": "5890925363067886150"},
-            {"text": "Switch to Pro", "callback_data": f"settings#sb_rl_dotier_{cust_uid}_{page}_pro", "icon_custom_emoji_id": "5805553606635559688"}
-        ],
-        [{"text": "Back", "callback_data": f"settings#sb_rl_u_{cust_uid}_{page}", "icon_custom_emoji_id": "5879857507198833579"}]
-    ]
-    from plugins.share_bot import send_or_edit_with_custom_icons
-    sent_ok = await send_or_edit_with_custom_icons(
-        client=bot,
-        chat_id=query.message.chat.id,
-        text=tier_text,
-        inline_keyboard=api_st_buttons,
-        message_id=query.message.id
-    )
-    if not sent_ok:
-        try: await query.message.edit_text(tier_text, reply_markup=InlineKeyboardMarkup(st_buttons))
-        except Exception: pass
+    await _send_or_edit_fast(query, tier_text, st_buttons, bot=bot)
 
   elif type.startswith("sb_rl_dotier_"):
     parts = type.split('_')
@@ -3440,19 +3285,7 @@ async def settings_query(bot, query):
           f"<u>All settings below are specific to this bot.</u>"
       )
 
-      from plugins.share_bot import send_or_edit_with_custom_icons
-      sent_ok = await send_or_edit_with_custom_icons(
-          client=bot,
-          chat_id=query.message.chat.id,
-          text=text,
-          inline_keyboard=api_buttons,
-          message_id=query.message.id
-      )
-      if not sent_ok:
-          try:
-              await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
-          except Exception:
-              pass
+      await _send_or_edit_fast(query, text, buttons, bot=bot)
 
   elif type.startswith("sb_toggle_mode_"):
       b_id = type.split("sb_toggle_mode_")[1]
@@ -3508,17 +3341,7 @@ async def settings_query(bot, query):
           f"────────────────────\n"
           f"<i>All settings here are 100% isolated and do not affect Delivery Bot Unlimited Pass configs.</i>"
       )
-      from plugins.share_bot import send_or_edit_with_custom_icons
-      sent_ok = await send_or_edit_with_custom_icons(
-          client=bot,
-          chat_id=query.message.chat.id,
-          text=text,
-          inline_keyboard=api_buttons,
-          message_id=query.message.id
-      )
-      if not sent_ok:
-          try: await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
-          except Exception: pass
+      await _send_or_edit_fast(query, text, buttons, bot=bot)
 
   elif type.startswith("sb_store_idx_"):
       sub_action = type.split("sb_store_idx_")[1]
@@ -3694,17 +3517,7 @@ async def settings_query(bot, query):
               f"────────────────────\n"
               f"<i>Auto-scanner database channel ke poster aur video files ko pair karke 800+ shows ka catalog create karta hai aur public channel me 600×720 enhanced posters publish karta hai.</i>"
           )
-          from plugins.share_bot import send_or_edit_with_custom_icons
-          sent_ok = await send_or_edit_with_custom_icons(
-              client=bot,
-              chat_id=query.message.chat.id,
-              text=text,
-              inline_keyboard=api_buttons,
-              message_id=query.message.id
-          )
-          if not sent_ok:
-              try: await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
-              except Exception: pass
+          await _send_or_edit_fast(query, text, buttons, bot=bot)
 
   elif type.startswith("sb_store_v_"):
       b_id = type.split("sb_store_v_")[1]
@@ -3752,8 +3565,15 @@ async def settings_query(bot, query):
       b_id = type.split("sb_store_logs_")[1]
       orders = await db.get_all_store_orders(limit=10)
       lines = []
+      import datetime
+      ist_tz = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
       for o in orders:
-          t_str = time.strftime('%d/%m %H:%M', time.localtime(o.get('created_at', time.time())))
+          t_ts = o.get('created_at', time.time())
+          try:
+              t_dt = datetime.datetime.fromtimestamp(float(t_ts), tz=ist_tz)
+              t_str = t_dt.strftime('%d/%m %I:%M %p IST')
+          except Exception:
+              t_str = "N/A"
           st = o.get('status', 'PENDING')
           st_emoji = '✅' if st == 'SUCCESS' else ('⏳' if st == 'PENDING' else '❌')
           lines.append(f"{st_emoji} <code>{o.get('order_id', '')[:8]}</code> • ₹{o.get('amount', 0)} • {o.get('show_title', '')[:20]} ({t_str})")
@@ -3839,24 +3659,7 @@ async def settings_query(bot, query):
           [InlineKeyboardButton("Yes, Purge All", callback_data=f"settings#sb_purge_confirm_{b_id}")],
           [InlineKeyboardButton("Cancel", callback_data=f"settings#sb_view_{b_id}")]
       ]
-      api_buttons = [
-          [{"text": "Yes, Purge All", "callback_data": f"settings#sb_purge_confirm_{b_id}", "icon_custom_emoji_id": "5809949600152296075"}],
-          [{"text": "Cancel", "callback_data": f"settings#sb_view_{b_id}", "icon_custom_emoji_id": "5970055887774028039"}]
-      ]
-
-      from plugins.share_bot import send_or_edit_with_custom_icons
-      sent_ok = await send_or_edit_with_custom_icons(
-          client=bot,
-          chat_id=query.message.chat.id,
-          text=text,
-          inline_keyboard=api_buttons,
-          message_id=query.message.id
-      )
-      if not sent_ok:
-          try:
-              await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
-          except Exception:
-              pass
+      await _send_or_edit_fast(query, text, buttons, bot=bot)
 
   elif type.startswith("sb_purge_confirm_"):
       b_id = type.split("sb_purge_confirm_")[1]
@@ -3977,19 +3780,7 @@ async def settings_query(bot, query):
           [{"text": "Back", "callback_data": f"settings#sb_view_{b_id}"}]
       ]
 
-      from plugins.share_bot import send_or_edit_with_custom_icons
-      sent_ok = await send_or_edit_with_custom_icons(
-          client=bot,
-          chat_id=query.message.chat.id,
-          text=text,
-          inline_keyboard=api_buttons,
-          message_id=query.message.id
-      )
-      if not sent_ok:
-          try:
-              await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
-          except Exception:
-              pass
+      await _send_or_edit_fast(query, text, buttons, bot=bot)
 
   elif type.startswith("sb_set_pdm_"):
       parts = type.split("_")
@@ -4676,19 +4467,7 @@ async def settings_query(bot, query):
           [{"text": "Back", "callback_data": f"settings#sb_view_{b_id}"}]
       ]
 
-      from plugins.share_bot import send_or_edit_with_custom_icons
-      sent_ok = await send_or_edit_with_custom_icons(
-          client=bot,
-          chat_id=query.message.chat.id,
-          text=txt,
-          inline_keyboard=api_btns,
-          message_id=query.message.id
-      )
-      if not sent_ok:
-          try:
-              await query.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(btns))
-          except Exception:
-              pass
+      await _send_or_edit_fast(query, txt, btns, bot=bot)
 
   elif type.startswith("sb_caption_edit_"):
       b_id = type.split("sb_caption_edit_")[1]
@@ -4715,20 +4494,7 @@ async def settings_query(bot, query):
           f"<i>This is how it will look when delivered to users.</i>"
       )
       btns = [[InlineKeyboardButton("Back", callback_data=f"settings#sb_caption_menu_{b_id}")]]
-      api_btns = [[{"text": "Back", "callback_data": f"settings#sb_caption_menu_{b_id}"}]]
-      from plugins.share_bot import send_or_edit_with_custom_icons
-      sent_ok = await send_or_edit_with_custom_icons(
-          client=bot,
-          chat_id=query.message.chat.id,
-          text=txt,
-          inline_keyboard=api_btns,
-          message_id=query.message.id
-      )
-      if not sent_ok:
-          try:
-              await query.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(btns))
-          except Exception:
-              pass
+      await _send_or_edit_fast(query, txt, btns, bot=bot)
 
   elif type.startswith("sb_caption_del_"):
       b_id = type.split("sb_caption_del_")[1]
@@ -4766,21 +4532,7 @@ async def settings_query(bot, query):
           kb.append(del_row)
           api_kb.append(api_del_row)
       kb.append([InlineKeyboardButton("Back", callback_data=f"settings#sb_view_{b_id}")])
-      api_kb.append([{"text": "Back", "callback_data": f"settings#sb_view_{b_id}"}])
-
-      from plugins.share_bot import send_or_edit_with_custom_icons
-      sent_ok = await send_or_edit_with_custom_icons(
-          client=bot,
-          chat_id=query.message.chat.id,
-          text=txt,
-          inline_keyboard=api_kb,
-          message_id=query.message.id
-      )
-      if not sent_ok:
-          try:
-              await query.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(kb))
-          except Exception:
-              pass
+      await _send_or_edit_fast(query, txt, kb, bot=bot)
 
   elif type.startswith("sb_btn_add_"):
       b_id = type.split("sb_btn_add_")[1]
@@ -4903,19 +4655,7 @@ async def settings_query(bot, query):
       kb.append([InlineKeyboardButton("Back", callback_data=f"settings#sb_view_{b_id}")])
       api_kb.append([{"text": "Back", "callback_data": f"settings#sb_view_{b_id}"}])
 
-      from plugins.share_bot import send_or_edit_with_custom_icons
-      sent_ok = await send_or_edit_with_custom_icons(
-          client=bot,
-          chat_id=query.message.chat.id,
-          text=text,
-          inline_keyboard=api_kb,
-          message_id=query.message.id
-      )
-      if not sent_ok:
-          try:
-              await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb))
-          except Exception:
-              pass
+      await _send_or_edit_fast(query, text, kb, bot=bot)
 
   elif type.startswith("sb_autodel_set_"):
       rest = type.split("sb_autodel_set_")[1]
@@ -4952,23 +4692,7 @@ async def settings_query(bot, query):
           [InlineKeyboardButton("📤 Export Active Users", callback_data=f"settings#sb_export_{b_id}")],
           [InlineKeyboardButton("Back", callback_data=f"settings#sb_view_{b_id}")]
       ]
-      api_kb = [
-          [{"text": "Export Active Users", "callback_data": f"settings#sb_export_{b_id}", "icon_custom_emoji_id": "5882207227997066107"}],
-          [{"text": "Back", "callback_data": f"settings#sb_view_{b_id}"}]
-      ]
-      from plugins.share_bot import send_or_edit_with_custom_icons
-      sent_ok = await send_or_edit_with_custom_icons(
-          client=bot,
-          chat_id=query.message.chat.id,
-          text=text,
-          inline_keyboard=api_kb,
-          message_id=query.message.id
-      )
-      if not sent_ok:
-          try:
-              await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb))
-          except Exception:
-              pass
+      await _send_or_edit_fast(query, text, kb, bot=bot)
 
   elif type.startswith("sb_export_"):
       b_id = type.split("sb_export_")[1]
@@ -5410,19 +5134,7 @@ async def settings_query(bot, query):
           f"• [JR] = Join Request mode enabled.</blockquote>"
       )
 
-      from plugins.share_bot import send_or_edit_with_custom_icons
-      sent_ok = await send_or_edit_with_custom_icons(
-          client=bot,
-          chat_id=query.message.chat.id,
-          text=text,
-          inline_keyboard=api_btns,
-          message_id=query.message.id
-      )
-      if not sent_ok:
-          try:
-              await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(btns))
-          except Exception:
-              pass
+      await _send_or_edit_fast(query, text, btns, bot=bot)
 
   elif type.startswith("sb_fsub_act_"):
       rest = type[len("sb_fsub_act_"):]
@@ -5823,19 +5535,7 @@ async def settings_query(bot, query):
           [{"text": "Back", "callback_data": "settings#sharebot"}]
       ]
 
-      from plugins.share_bot import send_or_edit_with_custom_icons
-      sent_ok = await send_or_edit_with_custom_icons(
-          client=bot,
-          chat_id=query.message.chat.id,
-          text=text,
-          inline_keyboard=api_buttons,
-          message_id=query.message.id
-      )
-      if not sent_ok:
-          try:
-              await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(btns))
-          except Exception:
-              pass
+      await _send_or_edit_fast(query, text, btns, bot=bot)
 
   elif type.startswith("sb_logs_manage_"):
       ch_key = type.split("sb_logs_manage_")[1]
@@ -5873,21 +5573,7 @@ async def settings_query(bot, query):
           btns.append([InlineKeyboardButton("🗑 Remove Channel", callback_data=f"settings#sb_logs_del_{ch_key}")])
           api_btns.append([{"text": "Remove Channel", "callback_data": f"settings#sb_logs_del_{ch_key}", "icon_custom_emoji_id": "6030400221232501136"}])
       btns.append([InlineKeyboardButton("Back", callback_data="settings#sb_logs_channel")])
-      api_btns.append([{"text": "Back", "callback_data": "settings#sb_logs_channel"}])
-
-      from plugins.share_bot import send_or_edit_with_custom_icons
-      sent_ok = await send_or_edit_with_custom_icons(
-          client=bot,
-          chat_id=query.message.chat.id,
-          text=text,
-          inline_keyboard=api_btns,
-          message_id=query.message.id
-      )
-      if not sent_ok:
-          try:
-              await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(btns))
-          except Exception:
-              pass
+      await _send_or_edit_fast(query, text, btns, bot=bot)
 
   elif type.startswith("sb_logs_set_"):
       ch_key = type.split("sb_logs_set_")[1]
@@ -6596,76 +6282,44 @@ async def settings_query(bot, query):
 
 
 async def main_buttons(user_id=None):
-  # Get current mode
-  mode = 'forward'
   menu_image_id = None
   if user_id:
       try:
           data = await get_configs(user_id)
-          mode = data.get('bot_mode', 'forward')
           menu_image_id = data.get('menu_image_id')
       except Exception:
           pass
 
   is_admin = await is_any_owner(user_id)
 
-  if mode == 'merger':
-      #  MERGER MODE: Clean separate menu
-      buttons = [
-          [
-              InlineKeyboardButton('• Accounts •', callback_data='settings#accounts'),
-              InlineKeyboardButton('• Channels •', callback_data='settings#channels')
-          ],
-          [
-              InlineKeyboardButton('• Audio Merge •', callback_data='mg#audio_list')
-          ]
+  buttons = [
+      [
+          InlineKeyboardButton('• Accounts •', callback_data='settings#accounts'),
+          InlineKeyboardButton('• Channels •', callback_data='settings#channels')
+      ],
+      [
+          InlineKeyboardButton('• Filters •', callback_data='settings#filters'),
+          InlineKeyboardButton('• Ex Settings •', callback_data='settings#nextfilters')
       ]
-      if is_admin:
-          buttons.append([
-              InlineKeyboardButton('• Dlvr Bot Setup •', callback_data='settings#sharebot'),
-              InlineKeyboardButton('• Stats •', callback_data='settings#stats')
-          ])
-      else:
-          buttons.append([
-              InlineKeyboardButton('• Stats •', callback_data='settings#stats')
-          ])
-      buttons.append([InlineKeyboardButton('❮ Bᴀᴄᴋ', callback_data='back')])
-
-  else:
-      #  FORWARD MODE: Full original menu
-      buttons = [
-          [
-              InlineKeyboardButton('• Accounts •', callback_data='settings#accounts'),
-              InlineKeyboardButton('• Channels •', callback_data='settings#channels')
-          ],
-          [
-              InlineKeyboardButton('• Filters •', callback_data='settings#filters'),
-              InlineKeyboardButton('• Ex Settings •', callback_data='settings#nextfilters')
-          ]
-      ]
-      if is_admin:
-          buttons.append([
-              InlineKeyboardButton('• Dlvr Bot Setup •', callback_data='settings#sharebot'),
-              InlineKeyboardButton('• Let\'s Enhance •', callback_data='settings#enhancer')
-          ])
-      else:
-          buttons.append([
-              InlineKeyboardButton('• Let\'s Enhance •', callback_data='settings#enhancer')
-          ])
+  ]
+  if is_admin:
       buttons.append([
-          InlineKeyboardButton('• Lang •', callback_data='settings#lang'),
-          InlineKeyboardButton('• Shorteners •', callback_data='settings#shorteners')
+          InlineKeyboardButton('• Dlvr Bot Setup •', callback_data='settings#sharebot'),
+          InlineKeyboardButton('• Stats •', callback_data='settings#stats')
       ])
-      if is_admin:
-          buttons.append([
-              InlineKeyboardButton('• Owner Panel •', callback_data='settings#owners'),
-              InlineKeyboardButton('• Stats •', callback_data='settings#stats')
-          ])
-      else:
-          buttons.append([
-              InlineKeyboardButton('• Stats •', callback_data='settings#stats')
-          ])
-      buttons.append([InlineKeyboardButton('❮ Bᴀᴄᴋ', callback_data='back')])
+  else:
+      buttons.append([
+          InlineKeyboardButton('• Stats •', callback_data='settings#stats')
+      ])
+  buttons.append([
+      InlineKeyboardButton('• Lang •', callback_data='settings#lang'),
+      InlineKeyboardButton('• Shorteners •', callback_data='settings#shorteners')
+  ])
+  if is_admin:
+      buttons.append([
+          InlineKeyboardButton('• Owner Panel •', callback_data='settings#owners')
+      ])
+  buttons.append([InlineKeyboardButton('❮ Bᴀᴄᴋ', callback_data='back')])
 
   return InlineKeyboardMarkup(buttons)
 

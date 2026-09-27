@@ -571,3 +571,193 @@ async def get_fresh_message(client, chat_id, message_id: int):
         import logging
         logging.getLogger(__name__).debug(f"get_fresh_message error for {chat_id}:{message_id} - {e}")
     return None
+
+
+def _is_audio_msg(msg) -> bool:
+    if getattr(msg, 'audio', None):
+        return True
+    doc = getattr(msg, 'document', None)
+    if doc:
+        fn = (getattr(doc, 'file_name', '') or '').lower()
+        mime = (getattr(doc, 'mime_type', '') or '').lower()
+        if mime.startswith('audio/') or fn.endswith(('.mp3', '.m4a', '.flac', '.wav', '.aac', '.ogg', '.opus', '.wma')):
+            return True
+    return False
+
+def _is_video_msg(msg) -> bool:
+    if getattr(msg, 'video', None) or getattr(msg, 'video_note', None):
+        return True
+    doc = getattr(msg, 'document', None)
+    if doc:
+        fn = (getattr(doc, 'file_name', '') or '').lower()
+        mime = (getattr(doc, 'mime_type', '') or '').lower()
+        if mime.startswith('video/') or fn.endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm', '.flv', '.3gp', '.m4v')):
+            return True
+    return False
+
+def _is_photo_msg(msg) -> bool:
+    if getattr(msg, 'photo', None):
+        return True
+    doc = getattr(msg, 'document', None)
+    if doc:
+        fn = (getattr(doc, 'file_name', '') or '').lower()
+        mime = (getattr(doc, 'mime_type', '') or '').lower()
+        if mime.startswith('image/') or fn.endswith(('.jpg', '.jpeg', '.png', '.webp', '.heic', '.bmp')):
+            return True
+    return False
+
+def _passes_filters(msg, disabled_types: list) -> bool:
+    """Return True if message passes the user's content-type filters."""
+    if not msg or getattr(msg, 'empty', False) or getattr(msg, 'service', False):
+        return False
+
+    if not disabled_types:
+        return True
+
+    # 1. Pure text message check
+    is_text = bool(getattr(msg, 'text', None) and (not getattr(msg, 'media', None) or getattr(getattr(msg, 'media', None), 'value', str(getattr(msg, 'media', None))) == 'web_page'))
+    if 'text' in disabled_types and is_text:
+        return False
+
+    # 2. Audio check (audio tag OR audio document)
+    if _is_audio_msg(msg):
+        if 'audio' in disabled_types:
+            return False
+        return True
+
+    # 3. Video check (video tag OR video document)
+    if _is_video_msg(msg):
+        if 'video' in disabled_types:
+            return False
+        return True
+
+    # 4. Photo check (photo tag OR photo document)
+    if _is_photo_msg(msg):
+        if 'photo' in disabled_types:
+            return False
+        return True
+
+    # 5. Voice
+    if 'voice' in disabled_types and getattr(msg, 'voice', None):
+        return False
+
+    # 6. Animation
+    if 'animation' in disabled_types and getattr(msg, 'animation', None):
+        return False
+
+    # 7. Sticker
+    if 'sticker' in disabled_types and getattr(msg, 'sticker', None):
+        return False
+
+    # 8. Poll
+    if 'poll' in disabled_types and getattr(msg, 'poll', None):
+        return False
+
+    # 9. Generic Document (non-audio, non-video, non-photo document)
+    if 'document' in disabled_types and getattr(msg, 'document', None):
+        return False
+
+    return True
+
+
+def _clean_video_caption(raw_text: str) -> str:
+    """
+    Cleans video caption:
+    - Extracts ONLY the title line.
+    - Removes leading emojis and promotional footers.
+    """
+    if not raw_text:
+        return ""
+
+    lines = [line.strip() for line in raw_text.strip().splitlines() if line.strip()]
+    if not lines:
+        return ""
+
+    promo_triggers = [
+        "important notice", "notice", "auto-deleted", "auto deleted", "deleted in",
+        "forward or save", "save it before", "powered by", "story tv", "watch now",
+        "for free", "join channel", "click here", "subscribe", "t.me/", "http://", "https://", "@"
+    ]
+
+    title_line = ""
+    for line in lines:
+        l_str = line.strip()
+        if not l_str:
+            continue
+        # Divider line
+        if all(c in '━─═-—_~*• ' for c in l_str) and len(l_str) >= 3:
+            continue
+        l_lower = l_str.lower()
+        if any(trig in l_lower for trig in promo_triggers):
+            continue
+        if any(w in l_str for w in ["𝗪𝗮𝘁𝗰𝗵", "𝗙𝗿𝗲𝗲", "𝗣𝗼𝘄𝗲𝗿𝗲𝗱", "𝗦𝘁𝗼𝗿𝘆", "𝗕𝗼𝘁", "𝗡𝗼𝘁𝗶𝗰𝗲", "𝗜𝗺𝗽𝗼𝗿𝘁𝗮𝗻𝘁", "𝗗𝗲𝗹𝗲𝘁𝗲𝗱"]):
+            continue
+        title_line = l_str
+        break
+
+    if not title_line and lines:
+        title_line = lines[0]
+
+    strip_emojis = ["🎬", "🎥", "📺", "🍿", "📹", "🔹", "🔸", "▫️", "▪️", "▶️", "👉", "✨", "🔥"]
+    for emo in strip_emojis:
+        if title_line.startswith(emo):
+            title_line = title_line[len(emo):].strip()
+
+    return title_line.strip()
+
+
+def process_poster_image(input_path: str, target_size: tuple[int, int] = (600, 720)) -> str:
+    """
+    Resizes and naturally enhances poster images to exactly 600x720.
+    """
+    import logging
+    _logger = logging.getLogger(__name__)
+    try:
+        from PIL import Image, ImageEnhance, ImageFilter
+        with Image.open(input_path) as img:
+            if img.mode in ("RGBA", "LA", "P"):
+                rgb_img = Image.new("RGB", img.size, (18, 18, 20))
+                if img.mode == "RGBA":
+                    rgb_img.paste(img, mask=img.split()[3])
+                else:
+                    rgb_img.paste(img.convert("RGB"))
+                img = rgb_img
+            elif img.mode != "RGB":
+                img = img.convert("RGB")
+
+            target_w, target_h = target_size
+            orig_w, orig_h = img.size
+
+            scale = min(target_w / orig_w, target_h / orig_h)
+            new_w = max(1, int(orig_w * scale))
+            new_h = max(1, int(orig_h * scale))
+
+            resized_content = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
+            if (new_w, new_h) != (target_w, target_h):
+                canvas = Image.new("RGB", (target_w, target_h), (16, 16, 18))
+                try:
+                    bg_img = img.resize((target_w, target_h), Image.Resampling.BILINEAR)
+                    bg_img = bg_img.filter(ImageFilter.GaussianBlur(radius=20))
+                    bg_img = ImageEnhance.Brightness(bg_img).enhance(0.40)
+                    canvas.paste(bg_img, (0, 0))
+                except Exception:
+                    pass
+
+                pos_x = (target_w - new_w) // 2
+                pos_y = (target_h - new_h) // 2
+                canvas.paste(resized_content, (pos_x, pos_y))
+                final_img = canvas
+            else:
+                final_img = resized_content
+
+            final_img = ImageEnhance.Sharpness(final_img).enhance(1.15)
+            final_img = ImageEnhance.Contrast(final_img).enhance(1.04)
+            final_img = ImageEnhance.Color(final_img).enhance(1.05)
+
+            final_img.save(input_path, format="JPEG", quality=95, optimize=True, subsampling=0)
+            return input_path
+    except Exception as e:
+        _logger.warning(f"Poster enhance error: {e}")
+        return input_path
+

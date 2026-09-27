@@ -161,223 +161,41 @@ async def _temp_dir_sizes() -> dict:
 
 # ── Running job counters ───────────────────────────────────────────────────────
 def _count_running_jobs() -> dict:
-    """Import lazily to avoid circular imports."""
     try:
-        from plugins.multijob import _mj_tasks, _mj_paused
-        mj_active = sum(1 for t in _mj_tasks.values() if not t.done())
-        mj_paused = sum(1 for ev in _mj_paused.values() if not ev.is_set())
+        from plugins.live_batch import _lb_tasks, _lb_paused
+        lb_active = sum(1 for t in _lb_tasks.values() if not t.done())
+        lb_paused = sum(1 for ev in _lb_paused.values() if not ev.is_set())
     except Exception:
-        mj_active, mj_paused = 0, 0
-
-    try:
-        from plugins.jobs import _job_tasks
-        lj_active = sum(1 for t in _job_tasks.values() if not t.done())
-    except Exception:
-        lj_active = 0
-
-    try:
-        from plugins.merger import _mg_tasks, _mg_paused
-        mg_active = sum(1 for t in _mg_tasks.values() if not t.done())
-        mg_paused = sum(1 for ev in _mg_paused.values() if not ev.is_set())
-    except Exception:
-        mg_active, mg_paused = 0, 0
-
-    try:
-        from plugins.cleaner import _cl_tasks, _cl_paused
-        cl_active = sum(1 for t in _cl_tasks.values() if not t.done())
-        cl_paused = sum(1 for ev in _cl_paused.values() if not ev.is_set())
-    except Exception:
-        cl_active, cl_paused = 0, 0
+        lb_active, lb_paused = 0, 0
 
     return {
-        "mj_active": mj_active,
-        "mj_paused": mj_paused,
-        "lj_active": lj_active,
-        "mg_active": mg_active,
-        "mg_paused": mg_paused,
-        "cl_active": cl_active,
-        "cl_paused": cl_paused,
+        "mj_active": 0,
+        "mj_paused": 0,
+        "lj_active": lb_active,
+        "mg_active": 0,
+        "mg_paused": 0,
+        "cl_active": 0,
+        "cl_paused": 0,
+        "lb_active": lb_active,
+        "lb_paused": lb_paused,
     }
 
 
 # ── Pause helpers ─────────────────────────────────────────────────────────────
 async def _pause_multijobs(reason: str) -> list[str]:
-    """Pause all running Multi Jobs. Returns list of paused job_ids."""
-    paused = []
-    try:
-        from plugins.multijob import _mj_tasks, _mj_paused
-        from database import db
-        for jid, task in list(_mj_tasks.items()):
-            if task.done():
-                continue
-            ev = _mj_paused.get(jid)
-            if ev and ev.is_set():  # currently running
-                ev.clear()          # pause
-                _sys_paused_jobs.add(f"mj:{jid}")
-                paused.append(jid)
-                try:
-                    await db.db["multijobs"].update_one(
-                        {"job_id": jid}, {"$set": {"status": "paused", "paused_reason": reason}}
-                    )
-                except Exception:
-                    pass
-    except Exception as e:
-        logger.error(f"[SysMonitor] pause_multijobs error: {e}")
-    return paused
-
+    return []
 
 async def _pause_livejobs(reason: str) -> list[str]:
-    """Stop (cancel) all Live Jobs — they have no pause, so we stop them
-    and set status=paused so they can be restarted from last_seen_id."""
-    stopped = []
-    try:
-        from plugins.jobs import _job_tasks
-        from database import db
-        for jid, task in list(_job_tasks.items()):
-            if task.done():
-                continue
-            _sys_paused_jobs.add(f"lj:{jid}")
-            stopped.append(jid)
-            try:
-                await db.db.jobs.update_one(
-                    {"job_id": jid},
-                    {"$set": {"status": "paused", "paused_reason": reason}}
-                )
-            except Exception:
-                pass
-            task.cancel()
-    except Exception as e:
-        logger.error(f"[SysMonitor] pause_livejobs error: {e}")
-    return stopped
-
+    return []
 
 async def _pause_cleanerjobs(reason: str) -> list[str]:
-    """Pause all running Cleaner Jobs. Returns list of paused job_ids."""
-    paused = []
-    try:
-        from plugins.cleaner import _cl_tasks, _cl_paused
-        from database import db
-        for jid, task in list(_cl_tasks.items()):
-            if task.done():
-                continue
-            ev = _cl_paused.get(jid)
-            if ev and ev.is_set():  # currently running
-                ev.clear()          # pause
-                _sys_paused_jobs.add(f"cl:{jid}")
-                paused.append(jid)
-                try:
-                    await db.db["cleaner_jobs"].update_one(
-                        {"job_id": jid}, {"$set": {"status": "paused", "paused_reason": reason}}
-                    )
-                except Exception:
-                    pass
-    except Exception as e:
-        logger.error(f"[SysMonitor] pause_cleanerjobs error: {e}")
-    return paused
-
+    return []
 
 async def _pause_mergers(reason: str, force_all: bool = False) -> list[str]:
-    """Pause merger jobs.
-    If force_all=False: only pause if more than 1 merger is running.
-    If force_all=True: pause ALL mergers regardless of count.
-    """
-    paused = []
-    try:
-        from plugins.merger import _mg_tasks, _mg_paused
-        from database import db
-
-        active_ids = [jid for jid, t in _mg_tasks.items() if not t.done()]
-        if not force_all and len(active_ids) <= 1:
-            return []  # Respect the "single merger can continue" rule
-
-        for jid in active_ids:
-            ev = _mg_paused.get(jid)
-            if ev and ev.is_set():
-                ev.clear()
-                _sys_paused_jobs.add(f"mg:{jid}")
-                paused.append(jid)
-                try:
-                    await db.db["merger_jobs"].update_one(
-                        {"job_id": jid}, {"$set": {"status": "paused", "paused_reason": reason}}
-                    )
-                except Exception:
-                    pass
-    except Exception as e:
-        logger.error(f"[SysMonitor] pause_mergers error: {e}")
-    return paused
-
+    return []
 
 async def _resume_sys_paused_jobs(bot) -> dict:
-    """Resume all jobs that were paused by the system monitor."""
-    resumed = {"mj": 0, "lj": 0, "mg": 0, "cl": 0}
-
-    to_remove = set()
-    for key in list(_sys_paused_jobs):
-        typ, jid = key.split(":", 1)
-
-        if typ == "mj":
-            try:
-                from plugins.multijob import _mj_paused
-                from database import db
-                ev = _mj_paused.get(jid)
-                if ev:
-                    ev.set()
-                    resumed["mj"] += 1
-                await db.db["multijobs"].update_one(
-                    {"job_id": jid}, {"$set": {"status": "running"}, "$unset": {"paused_reason": ""}}
-                )
-            except Exception:
-                pass
-            to_remove.add(key)
-
-        elif typ == "lj":
-            try:
-                from plugins.jobs import _job_tasks, _start_job_task
-                from database import db
-                job = await db.db.jobs.find_one({"job_id": jid})
-                if job:
-                    await db.db.jobs.update_one(
-                        {"job_id": jid},
-                        {"$set": {"status": "running"}, "$unset": {"paused_reason": ""}}
-                    )
-                    if jid not in _job_tasks or _job_tasks[jid].done():
-                        _start_job_task(jid, job["user_id"])
-                    resumed["lj"] += 1
-            except Exception:
-                pass
-            to_remove.add(key)
-
-        elif typ == "mg":
-            try:
-                from plugins.merger import _mg_paused
-                from database import db
-                ev = _mg_paused.get(jid)
-                if ev:
-                    ev.set()
-                    resumed["mg"] += 1
-                await db.db["merger_jobs"].update_one(
-                    {"job_id": jid}, {"$set": {"status": "running"}, "$unset": {"paused_reason": ""}}
-                )
-            except Exception:
-                pass
-            to_remove.add(key)
-
-        elif typ == "cl":
-            try:
-                from plugins.cleaner import _cl_paused
-                from database import db
-                ev = _cl_paused.get(jid)
-                if ev:
-                    ev.set()
-                    resumed["cl"] += 1
-                await db.db["cleaner_jobs"].update_one(
-                    {"job_id": jid}, {"$set": {"status": "running"}, "$unset": {"paused_reason": ""}}
-                )
-            except Exception:
-                pass
-            to_remove.add(key)
-
-    _sys_paused_jobs -= to_remove
+    return {"mj": 0, "lj": 0, "mg": 0, "cl": 0}
     return resumed
 
 
@@ -611,17 +429,20 @@ async def _stale_future_cleaner():
     """
     while True:
         await asyncio.sleep(600)   # run every 10 minutes
+        d_list = []
         try:
-            from plugins.jobs      import _lj_waiting
-            from plugins.multijob  import _mj_waiting
-            from plugins.merger    import _mg_waiter
-            from plugins.cleaner   import _cl_waiter
+            from plugins.live_batch import _lb_waiter
+            d_list.append((_lb_waiter, "lb"))
         except Exception:
-            continue
+            pass
+        try:
+            from plugins.share_jobs import _sj_waiting
+            d_list.append((_sj_waiting, "sj"))
+        except Exception:
+            pass
 
         now = asyncio.get_event_loop().time()
-        for d, name in [(_lj_waiting, "lj"), (_mj_waiting, "mj"),
-                        (_mg_waiter, "mg"), (_cl_waiter, "cl")]:
+        for d, name in d_list:
             stale = [uid for uid, fut in list(d.items())
                      if fut.done() or getattr(fut, '_created_at', now) < now - 600]
             for uid in stale:
@@ -804,15 +625,8 @@ async def sysmon_cb(bot, query: CallbackQuery):
     elif action == "do_cleanup":
         await query.message.edit_text("<i>🔄 Scanning and cleaning temp files... please wait.</i>")
 
-        # Get active merger working dirs BEFORE running cleanup
+        # Active working dirs before running cleanup
         active_wdirs: set = set()
-        try:
-            from plugins.merger import _mg_tasks
-            for jid, task in _mg_tasks.items():
-                if not task.done():
-                    active_wdirs.add(os.path.join(_BOT_DIR, "merge_tmp", str(jid)))
-        except Exception:
-            pass
 
         def _do_cleanup_sync():
             """Run entirely in a thread — no event loop blocking on large files."""
@@ -1010,15 +824,8 @@ def _get_user_active_jobs(user_id: int) -> dict:
     """Returns dict of active job counts for a given user."""
     result = {"lj": 0, "mj": 0, "mg": 0}
     try:
-        from plugins.jobs import _job_tasks
-        from plugins.multijob import _mj_tasks
-        from plugins.merger import _mg_tasks
-        # Live Jobs store user_id in task name or we check DB; use running tasks heuristic
-        result["lj"] = sum(1 for tid, t in _job_tasks.items()
-                           if not t.done() and str(user_id) in str(tid))
-        result["mj"] = sum(1 for tid, t in _mj_tasks.items()
-                           if not t.done() and str(user_id) in str(tid))
-        result["mg"] = sum(1 for tid, t in _mg_tasks.items()
+        from plugins.live_batch import _lb_tasks
+        result["lj"] = sum(1 for tid, t in _lb_tasks.items()
                            if not t.done() and str(user_id) in str(tid))
     except Exception:
         pass
@@ -1039,26 +846,16 @@ async def _show_users_panel(bot, message, owner_uid: int, page: int = 1, edit: b
 
     # Count active jobs across all plugins
     try:
-        from plugins.jobs import _job_tasks
+        from plugins.live_batch import _lb_tasks
         lj_map: dict[str, int] = {}
-        for tid in _job_tasks:
-            if not _job_tasks[tid].done():
+        for tid in _lb_tasks:
+            if not _lb_tasks[tid].done():
                 uid_part = str(tid).split("_")[0] if "_" in str(tid) else ""
                 if uid_part.lstrip("-").isdigit():
                     lj_map[uid_part] = lj_map.get(uid_part, 0) + 1
     except Exception:
         lj_map = {}
-
-    try:
-        from plugins.multijob import _mj_tasks
-        mj_map: dict[str, int] = {}
-        for tid in _mj_tasks:
-            if not _mj_tasks[tid].done():
-                uid_part = str(tid).split("_")[0] if "_" in str(tid) else ""
-                if uid_part.lstrip("-").isdigit():
-                    mj_map[uid_part] = mj_map.get(uid_part, 0) + 1
-    except Exception:
-        mj_map = {}
+    mj_map = {}
 
     lines = [
         f"<b>👥 Bot Users</b>  <i>({total} total • Page {page}/{total_pages})</i>\n"

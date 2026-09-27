@@ -59,6 +59,8 @@ def parse_duration_to_seconds(val, default_unit='m') -> int:
         return int(num * 604800)
     elif unit in ('mo', 'month', 'months'):
         return int(num * 2592000)
+    elif unit in ('y', 'yr', 'yrs', 'year', 'years'):
+        return int(num * 31536000)
     else:
         raise ValueError(f"Unknown duration unit: '{unit}'")
 
@@ -78,6 +80,9 @@ def format_duration_friendly(seconds: int) -> str:
     else:
         days = seconds // 86400
         rem_h = (seconds % 86400) // 3600
+        if rem_h == 0 and days % 365 == 0 and days >= 365:
+            years = days // 365
+            return f"{years}y"
         if rem_h == 0 and days % 30 == 0:
             months = days // 30
             return f"{months}mo"
@@ -104,6 +109,9 @@ def format_duration_verbose(seconds: int) -> str:
         days = seconds // 86400
         rem_h = (seconds % 86400) // 3600
         if rem_h == 0:
+            if days % 365 == 0 and days >= 365:
+                years = days // 365
+                return f"{years} year" if years == 1 else f"{years} years"
             if days % 30 == 0:
                 months = days // 30
                 return f"{months} month" if months == 1 else f"{months} months"
@@ -2228,7 +2236,12 @@ class Database:
     async def set_user_unlimited_pass(self, user_id: int, expiry_timestamp: float, user_name: str = "", bot_id: int = None, bot_username: str = "", plan_key: str = "", plan_name: str = "", amount: float = 0.0, savings: float = 0.0, tier: str = "basic"):
         """Set or update unlimited pass expiry, tier, and optional plan details."""
         import time
-        doc = {'expires_at': float(expiry_timestamp), 'updated_at': time.time(), 'tier': str(tier or 'basic').lower().strip()}
+        doc = {
+            'expires_at': float(expiry_timestamp),
+            'updated_at': time.time(),
+            'tier': str(tier or 'basic').lower().strip(),
+            'revoked': False
+        }
         if user_name:
             doc['user_name'] = str(user_name).strip()
         if bot_id:
@@ -2256,11 +2269,15 @@ class Database:
             duration_seconds = float(duration) * 86400.0
             dur_key_str = f"{int(duration)}d"
         elif isinstance(duration, str):
-            dur_key_str = duration
-            duration_seconds = float(parse_duration_to_seconds(duration, default_unit='d'))
+            clean_dur = duration.strip().lower()
+            dur_key_str = clean_dur.replace(" ", "")
+            duration_seconds = float(parse_duration_to_seconds(clean_dur, default_unit='d'))
         else:
-            dur_key_str = str(duration)
-            duration_seconds = float(duration)
+            dur_key_str = str(duration).strip().replace(" ", "")
+            try:
+                duration_seconds = float(parse_duration_to_seconds(dur_key_str, default_unit='d'))
+            except Exception:
+                duration_seconds = float(duration)
 
         p_key = plan_key or dur_key_str
         if not plan_name and p_key:
@@ -2510,45 +2527,72 @@ class Database:
 
     async def get_pass_sales_analytics(self) -> dict:
         """
-        Calculates pass subscription sales and revenue analytics:
+        Calculates pass subscription sales and revenue analytics in Indian Standard Time (IST):
         - total_sales: total number of paid pass orders
         - total_revenue: sum of amount for paid orders (INR)
-        - today_sales: number of paid pass orders today (IST)
-        - today_revenue: sum of amount for paid orders today (IST)
+        - today_sales: number of paid pass orders today (since 00:00:00 midnight IST)
+        - today_revenue: sum of amount for paid orders today (since 00:00:00 midnight IST)
+        - last24h_sales: number of paid pass orders in the rolling last 24 hours
+        - last24h_revenue: sum of amount for paid orders in the rolling last 24 hours
         - basic_sales: count of basic tier passes sold
         - pro_sales: count of pro tier passes sold
         - prem_sales: count of premium tier passes sold
         - gateway_stats: dict of {gateway_name: count}
         """
         import datetime
-        try:
-            import pytz
-            ist = pytz.timezone('Asia/Kolkata')
-            now_ist = datetime.datetime.now(ist)
-            midnight_ist = now_ist.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-        except Exception:
-            midnight_ist = (datetime.datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()) + (5.5 * 3600)
+        import time
+        now_ts = time.time()
+
+        # Exact IST Midnight Calculation using standard library timezone (UTC+5:30)
+        IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+        now_ist = datetime.datetime.now(IST)
+        midnight_ist_dt = now_ist.replace(hour=0, minute=0, second=0, microsecond=0)
+        midnight_ist = midnight_ist_dt.timestamp()
+        last_24h_ts = now_ts - 86400.0
 
         total_sales = 0
         total_revenue = 0.0
         today_sales = 0
         today_revenue = 0.0
+        last24h_sales = 0
+        last24h_revenue = 0.0
         basic_sales = 0
         pro_sales = 0
         prem_sales = 0
         gateway_stats = {}
 
+        def _to_timestamp(val) -> float:
+            if val is None:
+                return 0.0
+            if isinstance(val, (int, float)):
+                return float(val)
+            if isinstance(val, datetime.datetime):
+                if val.tzinfo is None:
+                    return val.replace(tzinfo=datetime.timezone.utc).timestamp()
+                return val.timestamp()
+            try:
+                return float(val)
+            except (ValueError, TypeError):
+                return 0.0
+
         try:
             cursor = self.pass_orders.find({'status': 'PAID'})
             async for doc in cursor:
                 total_sales += 1
-                amt = float(doc.get('amount') or 0.0)
+                try:
+                    amt = float(doc.get('amount') or 0.0)
+                except Exception:
+                    amt = 0.0
                 total_revenue += amt
 
-                ts = float(doc.get('paid_at') or doc.get('created_at') or 0.0)
+                ts = _to_timestamp(doc.get('paid_at') or doc.get('created_at'))
                 if ts >= midnight_ist:
                     today_sales += 1
                     today_revenue += amt
+
+                if ts >= last_24h_ts:
+                    last24h_sales += 1
+                    last24h_revenue += amt
 
                 tier = str(doc.get('tier') or 'basic').lower().strip()
                 if tier == 'pro':
@@ -2581,6 +2625,8 @@ class Database:
             'total_revenue': total_revenue,
             'today_sales': today_sales,
             'today_revenue': today_revenue,
+            'last24h_sales': last24h_sales,
+            'last24h_revenue': last24h_revenue,
             'basic_sales': basic_sales,
             'pro_sales': pro_sales,
             'prem_sales': prem_sales,

@@ -218,67 +218,18 @@ async def _claim_job(collection_name: str, job_id: str) -> bool:
     return result is not None
 
 
-# ── Per-Task Handlers ─────────────────────────────────────────────────────────
+# ── Per-Task Handlers (Removed) ───────────────────────────────────────────────
 async def _handle_merger(job_id: str, bot):
-    from plugins.merger import _mg_run_job, _mg_update_job, _db_get
-    logger.info(f"[{WORKER_NAME}] 🔀 Merger job: {job_id}")
-    await _set_worker_job(job_id, "merger")
-    try:
-        job = await _db_get(job_id)
-        uid = job.get("user_id") if job else None
-        await _mg_run_job(job_id, uid=uid, bot=bot)
-    except Exception as e:
-        logger.error(f"[{WORKER_NAME}] Merger {job_id} crashed: {e}")
-        try:
-            await _mg_update_job(job_id, status="error", error=str(e)[:400])
-        except Exception:
-            pass
-    finally:
-        await _clear_worker_job(job_id)
-
+    logger.info(f"[{WORKER_NAME}] 🔀 Merger feature removed.")
 
 async def _handle_cleaner(job_id: str, bot):
-    from plugins.cleaner import _cl_run_job, _cl_update_job
-    logger.info(f"[{WORKER_NAME}] 🧹 Cleaner job: {job_id}")
-    await _set_worker_job(job_id, "cleaner")
-    try:
-        await _cl_run_job(job_id, bot=bot)
-    except Exception as e:
-        logger.error(f"[{WORKER_NAME}] Cleaner {job_id} crashed: {e}")
-        try:
-            await _cl_update_job(job_id, {"status": "failed", "error": str(e)[:400]})
-        except Exception:
-            pass
-    finally:
-        await _clear_worker_job(job_id)
-
+    logger.info(f"[{WORKER_NAME}] 🧹 Cleaner feature removed.")
 
 async def _handle_multijob(job_id: str, bot):
-    logger.info(f"[{WORKER_NAME}] 📋 MultiJob: {job_id}")
-    await _set_worker_job(job_id, "multijob")
-    try:
-        try:
-            from plugins.multijob import _mj_run_job
-            await _mj_run_job(job_id, bot=bot)
-        except (ImportError, AttributeError):
-            from plugins.multijob import run_multijob
-            await run_multijob(job_id, bot=bot)
-    except Exception as e:
-        logger.error(f"[{WORKER_NAME}] MultiJob {job_id} crashed: {e}")
-    finally:
-        await _clear_worker_job(job_id)
-
+    logger.info(f"[{WORKER_NAME}] 📋 MultiJob feature removed.")
 
 async def _handle_taskjob(job_id: str, bot):
-    logger.info(f"[{WORKER_NAME}] ⚙️ TaskJob: {job_id}")
-    await _set_worker_job(job_id, "taskjob")
-    try:
-        from plugins.taskjob import run_task_job
-        await run_task_job(job_id, bot=bot)
-    except Exception as e:
-        logger.error(f"[{WORKER_NAME}] TaskJob {job_id} crashed: {e}")
-    finally:
-        await _clear_worker_job(job_id)
+    logger.info(f"[{WORKER_NAME}] ⚙️ TaskJob feature removed.")
 
 
 # ── Task Map ──────────────────────────────────────────────────────────────────

@@ -3849,6 +3849,8 @@ def _strip_api_keyboard_icons(inline_keyboard):
     return res
 
 
+_bot_supports_button_icons = {}  # {bot_token: bool}
+
 async def send_or_edit_with_custom_icons(
     client,
     chat_id: int,
@@ -3863,10 +3865,9 @@ async def send_or_edit_with_custom_icons(
 ) -> any:
     """
     Sends or edits a message using Telegram Bot API HTTP endpoint.
-    This enables `icon_custom_emoji_id` on inline keyboard buttons and
-    custom animated emojis (<tg-emoji>) in text and captions across Photos/Animations/Videos.
-    If the bot is not authorized to send button icons (Telegram 400 BUTTON_CUSTOM_EMOJI_INVALID),
-    it automatically retries via Bot API with icons stripped so text custom emojis (<tg-emoji>) ALWAYS succeed.
+    This enables `icon_custom_emoji_id` on inline keyboard buttons (if bot supports it)
+    and custom animated emojis (<tg-emoji>) in text and captions.
+    Fast-fails and caches unsupported button icons so retries do not lag the event loop.
     """
     import aiohttp
     import json
@@ -3885,7 +3886,7 @@ async def send_or_edit_with_custom_icons(
         bot_token = getattr(Config, "BOT_TOKEN", "") or os.environ.get("BOT_TOKEN", "") or getattr(Config, "MGMT_BOT_TOKEN", "") or os.environ.get("MGMT_BOT_TOKEN", "")
 
     if not bot_token:
-        logger.warning(f"[CustomEmojiAPI] ❌ No bot token resolved for client {getattr(getattr(client, 'me', None), 'username', getattr(client, 'name', 'bot'))} (client.id={getattr(getattr(client, 'me', None), 'id', getattr(client, 'id', None))}). Falling back to MTProto.")
+        logger.warning(f"[CustomEmojiAPI] ❌ No bot token resolved for client {getattr(getattr(client, 'me', None), 'username', getattr(client, 'name', 'bot'))}. Falling back to MTProto.")
         return False
 
     try:
@@ -3899,6 +3900,10 @@ async def send_or_edit_with_custom_icons(
     url = f"https://api.telegram.org/bot{bot_token}/"
     norm_kb = _normalize_api_keyboard(inline_keyboard)
 
+    # If known that bot cannot use button icons, strip immediately without failing
+    if _bot_supports_button_icons.get(bot_token) is False:
+        norm_kb = _strip_api_keyboard_icons(norm_kb)
+
     if photo_bytes:
         try:
             form = aiohttp.FormData()
@@ -3908,7 +3913,7 @@ async def send_or_edit_with_custom_icons(
             form.add_field("reply_markup", json.dumps({"inline_keyboard": norm_kb}))
             form.add_field("photo", photo_bytes, filename="qr.png", content_type="image/png")
             session = _get_shared_bot_api_session()
-            async with session.post(url + "sendPhoto", data=form, timeout=aiohttp.ClientTimeout(total=5.0)) as resp:
+            async with session.post(url + "sendPhoto", data=form, timeout=aiohttp.ClientTimeout(total=2.5)) as resp:
                 data = await resp.json()
                 if data.get("ok"):
                     logger.info(f"[CustomEmojiAPI] ✅ Photo sent successfully via Bot API to {c_id}")
@@ -3917,6 +3922,7 @@ async def send_or_edit_with_custom_icons(
                 # Retry with stripped button icons if custom emojis failed
                 err_desc = str(data.get("description", ""))
                 if "BUTTON_CUSTOM_EMOJI" in err_desc or "CUSTOM_EMOJI" in err_desc or data.get("error_code") == 400:
+                    _bot_supports_button_icons[bot_token] = False
                     stripped_kb = _strip_api_keyboard_icons(norm_kb)
                     form_retry = aiohttp.FormData()
                     form_retry.add_field("chat_id", str(c_id))
@@ -3924,7 +3930,7 @@ async def send_or_edit_with_custom_icons(
                     form_retry.add_field("parse_mode", parse_mode)
                     form_retry.add_field("reply_markup", json.dumps({"inline_keyboard": stripped_kb}))
                     form_retry.add_field("photo", photo_bytes, filename="qr.png", content_type="image/png")
-                    async with session.post(url + "sendPhoto", data=form_retry, timeout=aiohttp.ClientTimeout(total=5.0)) as resp_r:
+                    async with session.post(url + "sendPhoto", data=form_retry, timeout=aiohttp.ClientTimeout(total=2.5)) as resp_r:
                         data_r = await resp_r.json()
                         if data_r.get("ok"):
                             logger.info(f"[CustomEmojiAPI] ✅ Photo sent (retry stripped icons) via Bot API to {c_id}")
@@ -3969,7 +3975,7 @@ async def send_or_edit_with_custom_icons(
     try:
         session = _get_shared_bot_api_session()
         method, payload = _build_payload(norm_kb)
-        async with session.post(url + method, json=payload, timeout=aiohttp.ClientTimeout(total=5.0)) as resp:
+        async with session.post(url + method, json=payload, timeout=aiohttp.ClientTimeout(total=2.5)) as resp:
             data = await resp.json()
             if data.get("ok"):
                 logger.info(f"[CustomEmojiAPI] ✅ {method} succeeded via Bot API to {c_id}")
@@ -3992,11 +3998,12 @@ async def send_or_edit_with_custom_icons(
                 logger.warning(f"[CustomEmojiAPI] Bot API 429 rate limit hit: retry after {retry_after}s")
                 return False
 
-            # If button icons failed (not premium / not authorized bot), retry without button icons via Bot API so text <tg-emoji> works!
+            # If button icons failed (not premium / not authorized bot), remember and retry stripped
             if ("BUTTON_CUSTOM_EMOJI" in err_desc or "CUSTOM_EMOJI" in err_desc or err_code == 400) and "message is not modified" not in err_desc.lower():
+                _bot_supports_button_icons[bot_token] = False
                 stripped_kb = _strip_api_keyboard_icons(norm_kb)
                 method_r, payload_r = _build_payload(stripped_kb)
-                async with session.post(url + method_r, json=payload_r, timeout=aiohttp.ClientTimeout(total=5.0)) as resp_r:
+                async with session.post(url + method_r, json=payload_r, timeout=aiohttp.ClientTimeout(total=2.5)) as resp_r:
                     data_r = await resp_r.json()
                     if data_r.get("ok") or "message is not modified" in str(data_r.get("description", "")).lower():
                         logger.info(f"[CustomEmojiAPI] ✅ {method_r} (retry stripped icons) succeeded via Bot API to {c_id}")
@@ -7184,19 +7191,6 @@ def register_share_handlers(app: Client):
         _handle_share_bot_utr_message,
         filters.private & filters.text & ~filters.command(["start", "help", "about", "support", "updates", "broadcast", "premium", "norestrictions"])
     ), group=10)
-
-    # Add AI Enhancer support to Delivery Bot seamlessly
-    try:
-        from plugins.enhancer import enhance_offer_handler, enhance_execute_cb
-        app.add_handler(MessageHandler(
-            enhance_offer_handler,
-            filters.private & (filters.photo | filters.document) & ~filters.forwarded
-        ))
-        app.add_handler(CallbackQueryHandler(
-            enhance_execute_cb,
-            filters.regex(r'^enh#do$')
-        ))
-    except ImportError: pass
     logger.info(f"Handlers registered on {app.name}")
 
 
