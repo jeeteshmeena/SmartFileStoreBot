@@ -717,7 +717,7 @@ async def settings_query(bot, query):
           InlineKeyboardButton("UrlShortX", callback_data="settings#set_urlshortx")],
          [InlineKeyboardButton("🗑 Clear AroLinks", callback_data="settings#clear_arolinks"),
           InlineKeyboardButton("🗑 Clear UrlShortX", callback_data="settings#clear_urlshortx")],
-         [InlineKeyboardButton('❮ Bᴀᴄᴋ', callback_data="settings#main")]
+         [InlineKeyboardButton('❮ Bᴀᴄᴋ', callback_data="settings#sharebot")]
      ]
      await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
 
@@ -1048,6 +1048,7 @@ async def settings_query(bot, query):
      buttons.append([InlineKeyboardButton("Logs", callback_data="settings#sb_logs_channel")])
      buttons.append([InlineKeyboardButton("Anti Abuse", callback_data="settings#sb_anti_abuse")])
      buttons.append([InlineKeyboardButton("Rate Limit & Pass", callback_data="settings#sb_ratelimit")])
+     buttons.append([InlineKeyboardButton("• Shorteners •", callback_data="settings#shorteners")])
      buttons.append([InlineKeyboardButton("──── Delivery Bots ────", callback_data="settings#noop")])
 
      api_buttons = [
@@ -1055,6 +1056,7 @@ async def settings_query(bot, query):
          [{"text": "Logs", "callback_data": "settings#sb_logs_channel", "icon_custom_emoji_id": "5920046907782074235"}],
          [{"text": "Anti Abuse", "callback_data": "settings#sb_anti_abuse", "icon_custom_emoji_id": "5893192487324880883"}],
          [{"text": "Rate Limit & Pass", "callback_data": "settings#sb_ratelimit", "icon_custom_emoji_id": "5258113901106580375"}],
+         [{"text": "• Shorteners •", "callback_data": "settings#shorteners"}],
          [{"text": "──── Delivery Bots ────", "callback_data": "settings#noop"}],
      ]
 
@@ -6403,8 +6405,7 @@ async def main_buttons(user_id=None):
           InlineKeyboardButton('• Stats •', callback_data='settings#stats')
       ])
   buttons.append([
-      InlineKeyboardButton('• Lang •', callback_data='settings#lang'),
-      InlineKeyboardButton('• Shorteners •', callback_data='settings#shorteners')
+      InlineKeyboardButton('• Lang •', callback_data='settings#lang')
   ])
   buttons.append([InlineKeyboardButton('❮ Bᴀᴄᴋ', callback_data='back')])
 
