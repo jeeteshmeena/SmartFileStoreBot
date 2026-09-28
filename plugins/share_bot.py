@@ -3921,7 +3921,7 @@ async def send_or_edit_with_custom_icons(
                 
                 # Retry with stripped button icons if custom emojis failed
                 err_desc = str(data.get("description", ""))
-                if "BUTTON_CUSTOM_EMOJI" in err_desc or "CUSTOM_EMOJI" in err_desc or data.get("error_code") == 400:
+                if "BUTTON_CUSTOM_EMOJI" in err_desc or "custom emoji" in err_desc.lower():
                     _bot_supports_button_icons[bot_token] = False
                     stripped_kb = _strip_api_keyboard_icons(norm_kb)
                     form_retry = aiohttp.FormData()
@@ -3999,11 +3999,11 @@ async def send_or_edit_with_custom_icons(
                 return False
 
             # If button icons failed (not premium / not authorized bot), remember and retry stripped
-            if ("BUTTON_CUSTOM_EMOJI" in err_desc or "CUSTOM_EMOJI" in err_desc or err_code == 400) and "message is not modified" not in err_desc.lower():
+            if ("BUTTON_CUSTOM_EMOJI" in err_desc or "custom emoji" in err_desc.lower()) and "message is not modified" not in err_desc.lower():
                 _bot_supports_button_icons[bot_token] = False
                 stripped_kb = _strip_api_keyboard_icons(norm_kb)
                 method_r, payload_r = _build_payload(stripped_kb)
-                async with session.post(url + method_r, json=payload_r, timeout=aiohttp.ClientTimeout(total=2.5)) as resp_r:
+                async with session.post(url + method_r, json=payload_r, timeout=aiohttp.ClientTimeout(total=2.0)) as resp_r:
                     data_r = await resp_r.json()
                     if data_r.get("ok") or "message is not modified" in str(data_r.get("description", "")).lower():
                         logger.info(f"[CustomEmojiAPI] ✅ {method_r} (retry stripped icons) succeeded via Bot API to {c_id}")

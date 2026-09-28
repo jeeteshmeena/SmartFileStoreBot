@@ -194,7 +194,7 @@ _S["HOW_USE_TXT"] = {
 #  ABOUT_TXT 
 _S["ABOUT_TXT"] = {
     "en": (
-        "<b> »  Bot Details \n"
+        "<b><emoji id=\"6037622221625626773\">🤖</emoji> »  Bot Details \n"
         " \n"
         "  »  ᴍʏ ɴᴀᴍᴇ   : <a href='https://t.me/MeJeetX'>ᴀʀʏᴀ ʙᴏᴛ</a>\n"
         "  » ‍💻 ᴅᴇᴠᴇʟᴏᴘᴇʀ : <a href='https://t.me/MeJeetX'>ᴍᴇᴊᴇᴇᴛx</a>\n"
@@ -209,7 +209,7 @@ _S["ABOUT_TXT"] = {
         "</b>"
     ),
     "hi": (
-        "<b> »  Bot Details \n"
+        "<b><emoji id=\"6037622221625626773\">🤖</emoji> »  Bot Details \n"
         " \n"
         "  »  मेरा नाम   : <a href='https://t.me/MeJeetX'>Aryᴀ Bᴏᴛ</a>\n"
         "  » ‍💻 डेवलपर   : <a href='https://t.me/MeJeetX'>MeJeetX</a>\n"
@@ -224,7 +224,7 @@ _S["ABOUT_TXT"] = {
         "</b>"
     ),
     "hinglish": (
-        "<b> »  Bot Details \n"
+        "<b><emoji id=\"6037622221625626773\">🤖</emoji> »  Bot Details \n"
         " \n"
         "  »  Mera Naam : <a href='https://t.me/MeJeetX'>Aryᴀ Bᴏᴛ</a>\n"
         "  » ‍💻 Developer : <a href='https://t.me/MeJeetX'>MeJeetX</a>\n"
@@ -255,13 +255,6 @@ _S["STATUS_TXT"] = {
         "║ ┣⪼ DL Sᴘᴇᴇᴅ: <code>{dl_speed}</code>\n"
         "║ ┣⪼ UP Sᴘᴇᴇᴅ: <code>{ul_speed}</code>\n"
         "║\n"
-        "║ <u>Fᴏʀᴡᴀʀᴅ Iɴғᴏ</u>\n"
-        "║ ┣⪼ Aᴄᴛɪᴠᴇ Fᴏʀᴡᴀʀᴅꜱ: <code>{current_forwards}</code>\n"
-        "║ ┣⪼ Lɪᴠᴇ Jᴏʙs: <code>{live_forward}</code>\n"
-        "║ ┣⪼ Bᴀᴛᴄʜ Jᴏʙs: <code>{batch_forward}</code>\n"
-        "║ ┣⪼ Nᴏʀᴍᴀʟ Fᴏʀᴡᴀʀᴅꜱ: <code>{normal_forward}</code>\n"
-        "║ ┣⪼ Tᴏᴛᴀʟ Fᴏʀᴡᴀʀᴅꜱ: <code>{total_forward}</code>\n"
-        "║\n"
         "║ <u>Dᴀᴛᴀ &ᴀᴍᴘ; Uꜱᴀɢᴇ</u>\n"
         "║ ┣⪼ Tᴏᴛᴀʟ Dᴏᴡɴʟᴏᴀᴅs: <code>{total_files_downloaded}</code>\n"
         "║ ┣⪼ Tᴏᴛᴀʟ Uᴘʟᴏᴀᴅs: <code>{total_files_uploaded}</code>\n"
@@ -281,13 +274,6 @@ _S["STATUS_TXT"] = {
         "║ ┣⪼ DL Sᴘᴇᴇᴅ: <code>{dl_speed}</code>\n"
         "║ ┣⪼ UP Sᴘᴇᴇᴅ: <code>{ul_speed}</code>\n"
         "║\n"
-        "║ <u>Fᴏʀᴡᴀʀᴅ Iɴғᴏ</u>\n"
-        "║ ┣⪼ Aᴄᴛɪᴠᴇ Fᴏʀᴡᴀʀᴅꜱ: <code>{current_forwards}</code>\n"
-        "║ ┣⪼ Lɪᴠᴇ Jᴏʙs: <code>{live_forward}</code>\n"
-        "║ ┣⪼ Bᴀᴛᴄʜ Jᴏʙs: <code>{batch_forward}</code>\n"
-        "║ ┣⪼ Nᴏʀᴍᴀʟ Fᴏʀᴡᴀʀᴅꜱ: <code>{normal_forward}</code>\n"
-        "║ ┣⪼ Tᴏᴛᴀʟ Fᴏʀᴡᴀʀᴅꜱ: <code>{total_forward}</code>\n"
-        "║\n"
         "║ <u>Dᴀᴛᴀ &ᴀᴍᴘ; Uꜱᴀɢᴇ</u>\n"
         "║ ┣⪼ Tᴏᴛᴀʟ Dᴏᴡɴʟᴏᴀᴅs: <code>{total_files_downloaded}</code>\n"
         "║ ┣⪼ Tᴏᴛᴀʟ Uᴘʟᴏᴀᴅs: <code>{total_files_uploaded}</code>\n"
@@ -306,13 +292,6 @@ _S["STATUS_TXT"] = {
         "║ ┣⪼ Uᴘᴛɪᴍᴇ: <code>{uptime}</code>\n"
         "║ ┣⪼ DL Sᴘᴇᴇᴅ: <code>{dl_speed}</code>\n"
         "║ ┣⪼ UP Sᴘᴇᴇᴅ: <code>{ul_speed}</code>\n"
-        "║\n"
-        "║ <u>Fᴏʀᴡᴀʀᴅ Iɴғᴏ</u>\n"
-        "║ ┣⪼ Aᴄᴛɪᴠᴇ Fᴏʀᴡᴀʀᴅꜱ: <code>{current_forwards}</code>\n"
-        "║ ┣⪼ Lɪᴠᴇ Jᴏʙs: <code>{live_forward}</code>\n"
-        "║ ┣⪼ Bᴀᴛᴄʜ Jᴏʙs: <code>{batch_forward}</code>\n"
-        "║ ┣⪼ Nᴏʀᴍᴀʟ Fᴏʀᴡᴀʀᴅꜱ: <code>{normal_forward}</code>\n"
-        "║ ┣⪼ Tᴏᴛᴀʟ Fᴏʀᴡᴀʀᴅꜱ: <code>{total_forward}</code>\n"
         "║\n"
         "║ <u>Dᴀᴛᴀ &ᴀᴍᴘ; Uꜱᴀɢᴇ</u>\n"
         "║ ┣⪼ Tᴏᴛᴀʟ Dᴏᴡɴʟᴏᴀᴅs: <code>{total_files_downloaded}</code>\n"

@@ -98,7 +98,6 @@ class Translation(object):
 ┃
 ┣⊸ 👨 ᴜsᴇʀs   : <code>{}</code>
 ┣⊸ 🤖 ʙᴏᴛs    : <code>{}</code>
-┣⊸ 📡 ғᴏʀᴡᴀʀᴅ : <code>{}</code>
 ┣⊸ 📣 ᴄʜᴀɴɴᴇʟ : <code>{}</code>
 ┣⊸ 🚫 ʙᴀɴɴᴇᴅ  : <code>{}</code>
 ┃

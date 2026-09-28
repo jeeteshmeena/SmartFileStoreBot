@@ -13,12 +13,52 @@ from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, InputMedi
 
 
 async def _safe_edit(bot, query, **kwargs):
-    if getattr(query.message, 'photo', None):
-        await query.message.delete()
-        kwargs['chat_id'] = query.message.chat.id
+    try:
+        await query.answer()
+    except Exception:
+        pass
+
+    msg = getattr(query, 'message', None)
+    if not msg:
+        chat_id = getattr(getattr(query, 'from_user', None), 'id', None)
+        if chat_id:
+            kwargs['chat_id'] = chat_id
+            return await bot.send_message(**kwargs)
+        return None
+
+    if 'parse_mode' not in kwargs:
+        kwargs['parse_mode'] = enums.ParseMode.HTML
+
+    # Detect if message contains media (photo, animation, video, document, etc.)
+    has_media = bool(
+        getattr(msg, 'photo', None) or
+        getattr(msg, 'animation', None) or
+        getattr(msg, 'video', None) or
+        getattr(msg, 'document', None) or
+        getattr(msg, 'sticker', None) or
+        getattr(msg, 'caption', None) is not None
+    )
+
+    if has_media:
+        try:
+            await msg.delete()
+        except Exception:
+            pass
+        kwargs['chat_id'] = msg.chat.id
         return await bot.send_message(**kwargs)
     else:
-        return await query.message.edit_text(**kwargs)
+        try:
+            return await msg.edit_text(**kwargs)
+        except Exception as e:
+            err_str = str(e).lower()
+            if "message is not modified" in err_str or "message_not_modified" in err_str:
+                return msg
+            try:
+                await msg.delete()
+            except Exception:
+                pass
+            kwargs['chat_id'] = msg.chat.id
+            return await bot.send_message(**kwargs)
 
 async def _main_buttons(user_id: int):
     lang = await db.get_language(user_id)
@@ -101,17 +141,26 @@ async def restart(client, message):
     await msg.edit("<i>Server restarted successfully » </i>")
     os.execl(sys.executable, sys.executable, *sys.argv)
 
-@Client.on_message(filters.private & filters.command(['owner', 'panel', 'admin']))
+@Client.on_message(filters.private & filters.command(['owner', 'panel', 'admin', 'ownerpanel', 'op']))
 async def owner_cmd(bot, message):
     from plugins.owner_utils import is_any_owner
     if not await is_any_owner(message.from_user.id):
-        return await message.reply_text("⛔ Owner only!")
-    # Just redirect them into the callback logic using mock object or trigger via settings_cb if needed.
-    # But since owners_cb handles query.message.edit_text, it's easier to send a dummy message with inline keyboard that says "Open Panel"
-    await message.reply_text(
-        "<b>👑 Owner Panel Access</b>\nClick below to open the secure admin panel.",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Oᴘᴇɴ Oᴡɴᴇʀ Pᴀɴᴇʟ", callback_data="settings#owners")]])
-    )
+        return await message.reply_text("⛔ Owner only! You are not authorized to access this panel.")
+    try:
+        from plugins.settings import build_owner_panel
+        txt, btns = await build_owner_panel(message.from_user.id)
+        await message.reply_text(
+            txt,
+            reply_markup=InlineKeyboardMarkup(btns),
+            parse_mode=enums.ParseMode.HTML,
+            disable_web_page_preview=True
+        )
+    except Exception:
+        await message.reply_text(
+            "<b>👑 Owner Panel Access</b>\nClick below to open the secure admin panel.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Oᴘᴇɴ Oᴡɴᴇʀ Pᴀɴᴇʟ", callback_data="settings#owners")]]),
+            parse_mode=enums.ParseMode.HTML
+        )
 
 # ==================Callback Functions==================
 
@@ -140,6 +189,10 @@ async def how_to_use(bot, query):
 
 @Client.on_callback_query(filters.regex(r'^back'))
 async def back(bot, query):
+    try:
+        await query.answer()
+    except Exception:
+        pass
     user_id = query.from_user.id
     configs = await db.get_configs(user_id)
     menu_image_id = configs.get('menu_image_id')
@@ -151,16 +204,35 @@ async def back(bot, query):
 
     if menu_image_id:
         if getattr(query.message, "photo", None):
-            await query.message.edit_caption(caption=txt, reply_markup=markup)
-        else:
+            try:
+                await query.message.edit_caption(caption=txt, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+                return
+            except Exception:
+                pass
+        try:
             await query.message.delete()
-            await bot.send_photo(chat_id=query.message.chat.id, photo=menu_image_id, caption=txt, reply_markup=markup)
+        except Exception:
+            pass
+        await bot.send_photo(chat_id=query.message.chat.id, photo=menu_image_id, caption=txt, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
     else:
         if getattr(query.message, "photo", None):
-            await query.message.delete()
-            await bot.send_message(chat_id=query.message.chat.id, text=txt, reply_markup=markup)
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+            await bot.send_message(chat_id=query.message.chat.id, text=txt, reply_markup=markup, parse_mode=enums.ParseMode.HTML, disable_web_page_preview=True)
         else:
-            await query.message.edit_text(text=txt, reply_markup=markup, disable_web_page_preview=True)
+            try:
+                await query.message.edit_text(text=txt, reply_markup=markup, disable_web_page_preview=True, parse_mode=enums.ParseMode.HTML)
+            except Exception as e:
+                err_str = str(e).lower()
+                if "message is not modified" in err_str:
+                    return
+                try:
+                    await query.message.delete()
+                except Exception:
+                    pass
+                await bot.send_message(chat_id=query.message.chat.id, text=txt, reply_markup=markup, parse_mode=enums.ParseMode.HTML, disable_web_page_preview=True)
 
 def get_bot_version():
     try:
@@ -241,25 +313,38 @@ def get_whats_new():
 
 @Client.on_callback_query(filters.regex(r'^about'))
 async def about(bot, query):
-    user_id = query.from_user.id
-    lang = await db.get_language(user_id)
-    await _safe_edit(bot, query, 
-        text=_tx(lang, 'ABOUT_TXT', python_version=python_version(), bot_version=get_bot_version()),
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton('📢 Mᴀɪɴ Cʜᴀɴɴᴇʟ',   url='https://t.me/MeJeetX')],
-            [
-                InlineKeyboardButton('💬 Sᴜᴘᴘᴏʀᴛ Gʀᴏᴜᴘ', url='https://t.me/+1p2hcQ4ZaupjNjI1'),
-                InlineKeyboardButton('🙋 Hᴇʟᴘ',  callback_data='help'),
-            ],
-            [InlineKeyboardButton('»  ᴡʜᴀᴛ\'s Nᴇᴡ', callback_data='whatsnew')],
-            [InlineKeyboardButton('❮ Bᴀᴄᴋ', callback_data='back')]
-        ]),
-        disable_web_page_preview=True,
-        parse_mode=enums.ParseMode.HTML,
-    )
+    try:
+        await query.answer()
+    except Exception:
+        pass
+    try:
+        user_id = query.from_user.id
+        lang = await db.get_language(user_id)
+        txt = _tx(lang, 'ABOUT_TXT', python_version=python_version(), bot_version=get_bot_version())
+        await _safe_edit(bot, query, 
+            text=txt,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton('📢 Mᴀɪɴ Cʜᴀɴɴᴇʟ',   url='https://t.me/MeJeetX')],
+                [
+                    InlineKeyboardButton('💬 Sᴜᴘᴘᴏʀᴛ Gʀᴏᴜᴘ', url='https://t.me/+1p2hcQ4ZaupjNjI1'),
+                    InlineKeyboardButton('🙋 Hᴇʟᴘ',  callback_data='help'),
+                ],
+                [InlineKeyboardButton('»  ᴡʜᴀᴛ\'s Nᴇᴡ', callback_data='whatsnew')],
+                [InlineKeyboardButton('❮ Bᴀᴄᴋ', callback_data='back')]
+            ]),
+            disable_web_page_preview=True,
+            parse_mode=enums.ParseMode.HTML,
+        )
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"[About] Error: {e}", exc_info=True)
 
 @Client.on_callback_query(filters.regex(r'^whatsnew'))
 async def whats_new(bot, query):
+    try:
+        await query.answer()
+    except Exception:
+        pass
     text = f"<b><u>»  WHAT'S NEW (Latest Updates)</u></b>\n\n{get_whats_new()}"
     await _safe_edit(bot, query, 
         text=text,
@@ -294,70 +379,79 @@ def get_readable_time(seconds: int) -> str:
     ping_time += ":".join(time_list)
     return ping_time
 
+_last_net_sample = None  # (timestamp, bytes_recv, bytes_sent)
+
+def _get_instant_net_speed():
+    global _last_net_sample
+    import psutil, time
+    try:
+        now = time.time()
+        net = psutil.net_io_counters()
+        if _last_net_sample:
+            prev_t, prev_recv, prev_sent = _last_net_sample
+            dt = max(now - prev_t, 0.001)
+            dl_rate = (net.bytes_recv - prev_recv) / dt
+            ul_rate = (net.bytes_sent - prev_sent) / dt
+            _last_net_sample = (now, net.bytes_recv, net.bytes_sent)
+            return humanbytes(dl_rate) + "/s", humanbytes(ul_rate) + "/s"
+        else:
+            _last_net_sample = (now, net.bytes_recv, net.bytes_sent)
+            return "0 B/s", "0 B/s"
+    except Exception:
+        return "N/A", "N/A"
+
 @Client.on_callback_query(filters.regex(r'^status'))
 async def status(bot, query):
-    import psutil, time, asyncio
-    user_id = query.from_user.id
-    lang = await db.get_language(user_id)
-    
-    # Send a quick response to clear spinning wheel while computing speed
-    await query.answer()
-    
-    users_count = await db.col.count_documents({})
-    bots_count = await db.bot.count_documents({})
-    total_channels = await db.total_channels()
-    banned_count = await db.col.count_documents({"ban_status.is_banned": True})
-    
-    # Calculate real-time speed in one second
-    old_net = psutil.net_io_counters()
-    await asyncio.sleep(1)
-    new_net = psutil.net_io_counters()
-    dl_speed = humanbytes(new_net.bytes_recv - old_net.bytes_recv) + "/s"
-    ul_speed = humanbytes(new_net.bytes_sent - old_net.bytes_sent) + "/s"
-    
-    stats = await db.get_global_stats()
-    live_fwd = stats.get('live_forward', 0)
-    batch_fwd = stats.get('batch_forward', 0)
-    normal_fwd = stats.get('normal_forward', 0)
-    total_fwd = live_fwd + batch_fwd + normal_fwd
-    
-    dl_files = stats.get('total_files_downloaded', 0)
-    ul_files = stats.get('total_files_uploaded', 0)
-    data_usage = humanbytes(stats.get('total_data_usage_bytes', 0))
-    
-    from main import START_TIME
-    # Prefer bot_start_time persisted in DB at startup (accurate across restarts).
-    # Fall back to in-process START_TIME if DB value is unavailable.
-    _db_start = stats.get('bot_start_time') or START_TIME
-    uptime = get_readable_time(int(time.time() - _db_start))
-    
-    kwargs = {
-        'users_count': users_count,
-        'bots_count': bots_count,
-        'total_channels': total_channels,
-        'banned_users': banned_count,
-        'current_forwards': temp.forwardings,
-        'live_forward': live_fwd,
-        'batch_forward': batch_fwd,
-        'normal_forward': normal_fwd,
-        'total_forward': total_fwd,
-        'total_files_downloaded': dl_files,
-        'total_files_uploaded': ul_files,
-        'total_data_usage_bytes': data_usage,
-        'dl_speed': dl_speed,
-        'ul_speed': ul_speed,
-        'uptime': uptime
-    }
+    try:
+        await query.answer()
+    except Exception:
+        pass
+    try:
+        import time
+        user_id = query.from_user.id
+        lang = await db.get_language(user_id)
+        
+        users_count = await db.col.count_documents({})
+        bots_count = await db.bot.count_documents({})
+        total_channels = await db.total_channels()
+        banned_count = await db.col.count_documents({"ban_status.is_banned": True})
+        
+        dl_speed, ul_speed = _get_instant_net_speed()
+        
+        stats = await db.get_global_stats()
+        dl_files = stats.get('total_files_downloaded', 0)
+        ul_files = stats.get('total_files_uploaded', 0)
+        data_usage = humanbytes(stats.get('total_data_usage_bytes', 0))
+        
+        from main import START_TIME
+        _db_start = stats.get('bot_start_time') or START_TIME
+        uptime = get_readable_time(int(time.time() - _db_start))
+        
+        kwargs = {
+            'users_count': users_count,
+            'bots_count': bots_count,
+            'total_channels': total_channels,
+            'banned_users': banned_count,
+            'total_files_downloaded': dl_files,
+            'total_files_uploaded': ul_files,
+            'total_data_usage_bytes': data_usage,
+            'dl_speed': dl_speed,
+            'ul_speed': ul_speed,
+            'uptime': uptime
+        }
 
-    await _safe_edit(bot, query, 
-        text=_tx(lang, 'STATUS_TXT', **kwargs),
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton('🔄 Rᴇғʀᴇsʜ', callback_data='status')],
-            [InlineKeyboardButton('🗑 Cʟᴇᴀɴ Tᴇᴍᴘ', callback_data='sysmon#cleanup'), InlineKeyboardButton('«  Bᴀᴄᴋ', callback_data='back')]
-        ]),
-        parse_mode=enums.ParseMode.HTML,
-        disable_web_page_preview=True,
-    )
+        await _safe_edit(bot, query, 
+            text=_tx(lang, 'STATUS_TXT', **kwargs),
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton('🔄 Rᴇғʀᴇsʜ', callback_data='status')],
+                [InlineKeyboardButton('🗑 Cʟᴇᴀɴ Tᴇᴍᴘ', callback_data='sysmon#cleanup'), InlineKeyboardButton('«  Bᴀᴄᴋ', callback_data='back')]
+            ]),
+            parse_mode=enums.ParseMode.HTML,
+            disable_web_page_preview=True,
+        )
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"[Status] Error: {e}", exc_info=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # /stats  — Owner only: detailed bot statistics

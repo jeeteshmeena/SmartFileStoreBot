@@ -3,7 +3,7 @@ import logging
 from database import db
 from translation import Translation
 from plugins.lang import t, _tx
-from pyrogram import Client, filters
+from pyrogram import Client, filters, enums
 from .test import get_configs, update_configs, CLIENT, parse_buttons
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from config import Config
@@ -43,16 +43,39 @@ async def _ask(bot, user_id: int, timeout: int = 300):
 
 from pyrogram import ContinuePropagation
 
-async def _send_or_edit_fast(query, text, buttons, bot=None, msg=None):
+async def _send_or_edit_fast(query, text, buttons, api_buttons=None, bot=None, msg=None):
     """
-    Instantaneous (<50ms) MTProto message updater for settings UI.
-    Replaces slow Bot API HTTP requests that cause severe lag, 400 errors, and freeze.
+    Renders message with custom emojis and buttons.
+    If api_buttons is provided with custom emoji icons, attempts Telegram Bot API
+    to display button icons; if unavailable or fails, instantly falls back to MTProto
+    with HTML parse mode so text custom emojis (<emoji id="...">) ALWAYS render without lag.
     """
-    markup = InlineKeyboardMarkup(buttons)
+    client = bot or getattr(query, '_client', None)
     target_msg = msg or getattr(query, 'message', None)
+    chat_id = getattr(getattr(target_msg, 'chat', None), 'id', None) or getattr(getattr(query, 'from_user', None), 'id', None)
+    msg_id = getattr(target_msg, 'id', None)
+
+    # 1. If api_buttons given and client available, try Bot API for button custom emoji icons
+    if api_buttons and client and chat_id:
+        try:
+            from plugins.share_bot import send_or_edit_with_custom_icons
+            sent = await send_or_edit_with_custom_icons(
+                client=client,
+                chat_id=chat_id,
+                text=text,
+                inline_keyboard=api_buttons,
+                message_id=msg_id
+            )
+            if sent:
+                return True
+        except Exception:
+            pass
+
+    # 2. Fast MTProto edit with HTML parse_mode (preserves text animated custom emojis <emoji id="...">)
+    markup = InlineKeyboardMarkup(buttons)
     if target_msg:
         try:
-            await target_msg.edit_text(text, reply_markup=markup)
+            await target_msg.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
             return True
         except Exception as e:
             err_str = str(e).lower()
@@ -62,11 +85,10 @@ async def _send_or_edit_fast(query, text, buttons, bot=None, msg=None):
                 await target_msg.delete()
             except Exception:
                 pass
-    client = bot or getattr(query, '_client', None)
-    chat_id = getattr(getattr(target_msg, 'chat', None), 'id', None) or getattr(getattr(query, 'from_user', None), 'id', None)
+
     if client and chat_id:
         try:
-            await client.send_message(chat_id=chat_id, text=text, reply_markup=markup)
+            await client.send_message(chat_id=chat_id, text=text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
             return True
         except Exception:
             pass
@@ -255,9 +277,51 @@ async def protected_chats_cb(bot, query):
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="settings#protected")]]))
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Owners / Co-Owners + User Limits — settings#owners / settings#owner_*
-# ══════════════════════════════════════════════════════════════════════════════
+async def build_owner_panel(uid: int):
+    primary = Config.BOT_OWNER_ID
+    co = await db.get_co_owners()
+    limits = await db.get_global_user_limits()
+    from plugins.owner_utils import get_disabled_features, FEATURE_LABELS
+    disabled = await get_disabled_features()
+    is_primary = uid in Config.BOT_OWNER_ID
+    btns = []
+    # Primary owners (read-only)
+    btns.append([InlineKeyboardButton("⭐ Pʀɪᴍᴀʀʏ Oᴡɴᴇʀs", callback_data="settings#noop")])
+    for pid in primary:
+        btns.append([InlineKeyboardButton(f"🟡 {pid} (primary)", callback_data="settings#noop")])
+    # Co owners
+    btns.append([InlineKeyboardButton("👑 Cᴏ-Oᴡɴᴇʀs", callback_data="settings#noop")])
+    for cid in co:
+        btns.append([InlineKeyboardButton(f"🔵 {cid}  —  tap to remove", callback_data=f"settings#owner_rm_{cid}")])
+    if is_primary:
+        btns.append([InlineKeyboardButton("➕ Aᴅᴅ Cᴏ-Oᴡɴᴇʀ", callback_data="settings#owner_add")])
+    btns.append([
+        InlineKeyboardButton("⚙️ Gʟᴏʙᴀʟ Lɪᴍɪᴛs", callback_data="settings#limits_global"),
+        InlineKeyboardButton("🔧 Usᴇʀ Lɪᴍɪᴛ", callback_data="settings#limits_user")
+    ])
+    btns.append([
+        InlineKeyboardButton(f"🔌 Fᴇᴀᴛᴜʀᴇs ({len(disabled)} ᴅɪsᴀʙʟᴇᴅ)", callback_data="settings#features"),
+        InlineKeyboardButton("🖥️ Bɪɴᴅ Wᴏʀᴋᴇʀs", callback_data="settings#routing")
+    ])
+    btns.append([
+        InlineKeyboardButton("📊 Sʏs Mᴏɴɪᴛᴏʀ", callback_data="sysmon#stats"),
+        InlineKeyboardButton("🔒 Pʀᴏᴛᴇᴄᴛᴇᴅ Cʜᴀᴛs", callback_data="settings#protected")
+    ])
+    btns.append([
+        InlineKeyboardButton("🚫 Bᴀɴ Lɪsᴛ", callback_data="ban#list#1"),
+        InlineKeyboardButton("⚪ Wʜɪᴛᴇʟɪsᴛ", callback_data="wl#list#1")
+    ])
+    btns.append([InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="settings#main")])
+    txt = (
+        "<b><u>👑 Owner / Admin Control Panel</u></b>\n\n"
+        f"<b>Primary Owners:</b> {len(primary)}  |  <b>Co-Owners:</b> {len(co)}\n\n"
+        f"<b>Global User Limits:</b>\n"
+        f"  Accounts: <code>{limits.get('max_accounts', 2)}</code>\n\n"
+        "<b>Feature Controls & Workers:</b>\n"
+        + ("  Disabled: " + ", ".join(FEATURE_LABELS.get(f, f) for f in disabled) if disabled else "  All features currently enabled.")
+        + "\n\n<i>Co-owners have FULL backend admin control. Only primary owners can add/remove other owners.</i>"
+    )
+    return txt, btns
 
 @Client.on_callback_query(filters.regex(r'^settings#(owners|owner_|limits_|features_|features$)'))
 async def owners_cb(bot, query):
@@ -365,53 +429,12 @@ async def owners_cb(bot, query):
 
     # ── Owners Management ─────────────────────────────────────────────────────
     if data == "owners":
-        primary = Config.BOT_OWNER_ID
-        co = await db.get_co_owners()
-        limits = await db.get_global_user_limits()
-        from plugins.owner_utils import get_disabled_features, FEATURE_LABELS
-        disabled = await get_disabled_features()
-        btns = []
-        # Primary owners (read-only)
-        btns.append([InlineKeyboardButton("⭐ Pʀɪᴍᴀʀʏ Oᴡɴᴇʀs", callback_data="settings#noop")])
-        for pid in primary:
-            btns.append([InlineKeyboardButton(f"🟡 {pid} (primary)", callback_data="settings#noop")])
-        # Co owners
-        btns.append([InlineKeyboardButton("👑 Cᴏ-Oᴡɴᴇʀs", callback_data="settings#noop")])
-        for cid in co:
-            btns.append([InlineKeyboardButton(f"🔵 {cid}  —  tap to remove", callback_data=f"settings#owner_rm_{cid}")])
-        if is_primary:
-            btns.append([InlineKeyboardButton("➕ Aᴅᴅ Cᴏ-Oᴡɴᴇʀ", callback_data="settings#owner_add")])
-        btns.append([
-            InlineKeyboardButton("⚙️ Gʟᴏʙᴀʟ Lɪᴍɪᴛs", callback_data="settings#limits_global"),
-            InlineKeyboardButton("🔧 Usᴇʀ Lɪᴍɪᴛ", callback_data="settings#limits_user")
-        ])
-        btns.append([
-            InlineKeyboardButton(f"🔌 Fᴇᴀᴛᴜʀᴇs ({len(disabled)} ᴅɪsᴀʙʟᴇᴅ)", callback_data="settings#features"),
-            InlineKeyboardButton("🖥️ Bɪɴᴅ Wᴏʀᴋᴇʀs", callback_data="settings#routing")
-        ])
-        btns.append([
-            InlineKeyboardButton("📊 Sʏs Mᴏɴɪᴛᴏʀ", callback_data="sysmon#stats"),
-            InlineKeyboardButton("🔒 Pʀᴏᴛᴇᴄᴛᴇᴅ Cʜᴀᴛs", callback_data="settings#protected")
-        ])
-        btns.append([
-            InlineKeyboardButton("🚫 Bᴀɴ Lɪsᴛ", callback_data="ban#list#1"),
-            InlineKeyboardButton("⚪ Wʜɪᴛᴇʟɪsᴛ", callback_data="wl#list#1")
-        ])
-        btns.append([InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="settings#main")])
-        txt = (
-            "<b><u>👑 Owner / Admin Control Panel</u></b>\n\n"
-            f"<b>Primary Owners:</b> {len(primary)}  |  <b>Co-Owners:</b> {len(co)}\n\n"
-            f"<b>Global User Limits:</b>\n"
-            f"  Accounts: <code>{limits.get('max_accounts', 2)}</code>\n\n"
-            "<b>Feature Controls & Workers:</b>\n"
-            + ("  Disabled: " + ", ".join(FEATURE_LABELS.get(f, f) for f in disabled) if disabled else "  All features currently enabled.")
-            + "\n\n<i>Co-owners have FULL backend admin control. Only primary owners can add/remove other owners.</i>"
-        )
+        txt, btns = await build_owner_panel(uid)
         if getattr(query.message, "photo", None):
             await query.message.delete()
-            await bot.send_message(query.message.chat.id, txt, reply_markup=InlineKeyboardMarkup(btns))
+            await bot.send_message(query.message.chat.id, txt, reply_markup=InlineKeyboardMarkup(btns), parse_mode=enums.ParseMode.HTML)
         else:
-            await query.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(btns))
+            await query.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(btns), parse_mode=enums.ParseMode.HTML)
 
     elif data == "owner_add":
         if not is_primary:
@@ -1053,7 +1076,7 @@ async def settings_query(bot, query):
          f"────────────────────\n"
          f"<b>Allocated Bots:</b> <code>{len(bots)}/10</code>"
      )
-     await _send_or_edit_fast(query, text, buttons, bot=bot)
+     await _send_or_edit_fast(query, text, buttons, api_buttons=api_buttons, bot=bot)
 
   elif type == "sharebotprotect":
      protect = await db.get_share_protect_global()
@@ -1105,7 +1128,7 @@ async def settings_query(bot, query):
         f"After <b>{max_strikes} strikes</b> the user is <b>silently auto-banned</b> with no message sent. "
         f"Owners, co-owners, and whitelisted users are always exempt regardless of this setting.</blockquote>"
     )
-    await _send_or_edit_fast(query, text, buttons, bot=bot)
+    await _send_or_edit_fast(query, text, buttons, api_buttons=api_buttons, bot=bot)
 
   elif type == "sb_abuse_toggle":
     abuse_cfg = await db.get_anti_abuse_config()
@@ -1306,7 +1329,7 @@ async def settings_query(bot, query):
         f'<emoji id="5904359114531675993">💳</emoji> <b>Gateways:-</b> UPI: {upi_status} | Cashfree: {cf_status} | OxaPay: {oxa_status}'
     )
 
-    await _send_or_edit_fast(query, body_text, buttons, bot=bot)
+    await _send_or_edit_fast(query, body_text, buttons, api_buttons=api_buttons, bot=bot)
 
   elif type == "sb_rl_uiver_menu":
     rl_cfg = await db.get_delivery_rate_limit_config()
@@ -1364,7 +1387,7 @@ async def settings_query(bot, query):
         f"• <b>Version 3 (Tiered: Basic / Pro / Premium):</b>\n"
         f"  User chooses tier (Basic, Pro with No FSub, Premium with Storyfi/Arya perks) then selects plan with instant gateway and payment switcher.</blockquote>"
     )
-    await _send_or_edit_fast(query, uiver_text, uiver_buttons, bot=bot)
+    await _send_or_edit_fast(query, uiver_text, uiver_buttons, api_buttons=uiver_api_buttons, bot=bot)
 
   elif type == "sb_rl_set_v1":
     await db.set_delivery_rate_limit_config(pass_ui_version='v1')
@@ -1690,7 +1713,7 @@ async def settings_query(bot, query):
         [{"text": "Manage Plan Visibility", "callback_data": "settings#sb_rl_toggle_plans_menu", "icon_custom_emoji_id": "6034898821517940846"}],
         [{"text": "Back", "callback_data": "settings#sb_ratelimit"}],
     ]
-    await _send_or_edit_fast(query, text, buttons, bot=bot)
+    await _send_or_edit_fast(query, text, buttons, api_buttons=api_buttons, bot=bot)
 
   elif type in ("sb_rl_edit_prices_basic", "sb_rl_edit_prices_pro"):
     await query.message.delete()
@@ -1780,7 +1803,7 @@ async def settings_query(bot, query):
         f"• <b>Hidden:</b> Hidden from users during checkout.\n"
         f"────────────────────"
     )
-    await _send_or_edit_fast(query, text, buttons, bot=bot)
+    await _send_or_edit_fast(query, text, buttons, api_buttons=api_buttons, bot=bot)
 
   elif type.startswith("sb_rl_togplan_"):
     plan_key = type.replace("sb_rl_togplan_", "").strip()
@@ -1831,7 +1854,7 @@ async def settings_query(bot, query):
         f'<emoji id="5283232570660634549">⚡</emoji> <b>Cashfree:-</b> {cf_status}\n'
         f'<emoji id="5800720664620961831">🌐</emoji> <b>Crypto:-</b> {oxa_status}'
     )
-    await _send_or_edit_fast(query, pay_text, pay_buttons, bot=bot)
+    await _send_or_edit_fast(query, pay_text, pay_buttons, api_buttons=pay_api_buttons, bot=bot)
 
   elif type == "sb_rl_cf_menu":
     from plugins.cashfree_helper import get_cashfree_credentials
@@ -1869,7 +1892,7 @@ async def settings_query(bot, query):
         f"2. Go to <b>Payment Gateway → Developers → API Keys</b>\n"
         f"3. Copy your <b>App ID</b> and <b>Secret Key</b> and set them here or in <code>.env</code>.</blockquote>"
     )
-    await _send_or_edit_fast(query, cf_text, buttons, bot=bot)
+    await _send_or_edit_fast(query, cf_text, buttons, api_buttons=api_buttons, bot=bot)
 
   elif type == "sb_rl_cf_appid":
     await query.message.delete()
@@ -1986,7 +2009,7 @@ async def settings_query(bot, query):
         f"• <b>Automated (Gmail):</b> User enters UTR or system checks Gmail IMAP for transaction emails and verifies automatically within 15 seconds.\n"
         f"• <b>Manual (Screenshot):</b> User sends payment screenshot in Delivery Bot within 5 minutes. Admin receives notification in Main Bot with Approve & Decline buttons!</blockquote>"
     )
-    await _send_or_edit_fast(query, upi_text, buttons, bot=bot)
+    await _send_or_edit_fast(query, upi_text, buttons, api_buttons=api_buttons, bot=bot)
 
   elif type == "sb_rl_upi_toggle":
     rl_cfg = await db.get_delivery_rate_limit_config()
@@ -2123,7 +2146,7 @@ async def settings_query(bot, query):
         f"<b>Environment:</b> <code>{env_str}</code>\n"
         f"<b>Status:</b> {oxa_status_str}"
     )
-    await _send_or_edit_fast(query, oxa_text, buttons, bot=bot)
+    await _send_or_edit_fast(query, oxa_text, buttons, api_buttons=api_buttons, bot=bot)
 
   elif type == "sb_rl_oxa_key":
     await query.message.delete()
@@ -2219,7 +2242,7 @@ async def settings_query(bot, query):
         "────────────────────"
     )
 
-    await _send_or_edit_fast(query, text, buttons, bot=bot)
+    await _send_or_edit_fast(query, text, buttons, api_buttons=api_buttons, bot=bot)
 
   elif type == "sb_rl_add_cust":
     prompt_text = (
@@ -2313,7 +2336,14 @@ async def settings_query(bot, query):
         ],
         [InlineKeyboardButton("Back", callback_data="settings#sb_rl_cust_0")]
     ]
-    await _send_or_edit_fast(query, tier_text, tier_buttons, bot=bot, msg=msg)
+    api_tier_buttons = [
+        [
+            {"text": "Basic Pass", "callback_data": f"settings#sb_rl_gtier_{target_uid}_basic", "icon_custom_emoji_id": "5890925363067886150"},
+            {"text": "Pro Pass", "callback_data": f"settings#sb_rl_gtier_{target_uid}_pro", "icon_custom_emoji_id": "5805553606635559688"}
+        ],
+        [{"text": "Back", "callback_data": "settings#sb_rl_cust_0"}]
+    ]
+    await _send_or_edit_fast(query, tier_text, tier_buttons, api_buttons=api_tier_buttons, bot=bot, msg=msg)
 
   elif type.startswith("sb_rl_gtierselect_"):
     target_uid = int(type.split('_')[-1])
@@ -2343,7 +2373,14 @@ async def settings_query(bot, query):
         ],
         [InlineKeyboardButton("Back", callback_data="settings#sb_rl_cust_0")]
     ]
-    await _send_or_edit_fast(query, tier_text, tier_buttons, bot=bot)
+    api_tier_buttons = [
+        [
+            {"text": "Basic Pass", "callback_data": f"settings#sb_rl_gtier_{target_uid}_basic", "icon_custom_emoji_id": "5890925363067886150"},
+            {"text": "Pro Pass", "callback_data": f"settings#sb_rl_gtier_{target_uid}_pro", "icon_custom_emoji_id": "5805553606635559688"}
+        ],
+        [{"text": "Back", "callback_data": "settings#sb_rl_cust_0"}]
+    ]
+    await _send_or_edit_fast(query, tier_text, tier_buttons, api_buttons=api_tier_buttons, bot=bot)
 
   elif type.startswith("sb_rl_gtier_"):
     parts = type.split('_')
@@ -2389,7 +2426,28 @@ async def settings_query(bot, query):
             InlineKeyboardButton("Back", callback_data="settings#sb_rl_cust_0")
         ]
     ]
-    await _send_or_edit_fast(query, dur_text, dur_buttons, bot=bot)
+    api_dur_buttons = [
+        [
+            {"text": "1 Day", "callback_data": f"settings#sb_rl_gdur_{target_uid}_{tier}_1d", "icon_custom_emoji_id": "5882207227997066107"},
+            {"text": "3 Days", "callback_data": f"settings#sb_rl_gdur_{target_uid}_{tier}_3d", "icon_custom_emoji_id": "5882207227997066107"}
+        ],
+        [
+            {"text": "7 Days", "callback_data": f"settings#sb_rl_gdur_{target_uid}_{tier}_7d", "icon_custom_emoji_id": "5882207227997066107"},
+            {"text": "1 Month", "callback_data": f"settings#sb_rl_gdur_{target_uid}_{tier}_1mo", "icon_custom_emoji_id": "5882207227997066107"}
+        ],
+        [
+            {"text": "6 Months", "callback_data": f"settings#sb_rl_gdur_{target_uid}_{tier}_6mo", "icon_custom_emoji_id": "5882207227997066107"},
+            {"text": "1 Year", "callback_data": f"settings#sb_rl_gdur_{target_uid}_{tier}_365d", "icon_custom_emoji_id": "5882207227997066107"}
+        ],
+        [
+            {"text": "Custom Duration", "callback_data": f"settings#sb_rl_cgdur_{target_uid}_{tier}", "icon_custom_emoji_id": "6030400221232501136"}
+        ],
+        [
+            {"text": "Change Tier", "callback_data": f"settings#sb_rl_gtierselect_{target_uid}"},
+            {"text": "Back", "callback_data": "settings#sb_rl_cust_0"}
+        ]
+    ]
+    await _send_or_edit_fast(query, dur_text, dur_buttons, api_buttons=api_dur_buttons, bot=bot)
 
   elif type.startswith("sb_rl_cgdur_"):
     parts = type.split('_')
@@ -2828,7 +2886,7 @@ async def settings_query(bot, query):
         {"text": "Back", "callback_data": f"settings#sb_rl_cust_{page}"}
     ])
 
-    await _send_or_edit_fast(query, body, buttons, bot=bot)
+    await _send_or_edit_fast(query, body, buttons, api_buttons=api_buttons, bot=bot)
 
   elif type.startswith("sb_rl_settier_"):
     parts = type.split('_')
@@ -2850,7 +2908,14 @@ async def settings_query(bot, query):
         ],
         [InlineKeyboardButton("Back", callback_data=f"settings#sb_rl_u_{cust_uid}_{page}")]
     ]
-    await _send_or_edit_fast(query, tier_text, st_buttons, bot=bot)
+    api_st_buttons = [
+        [
+            {"text": "Switch to Basic", "callback_data": f"settings#sb_rl_dotier_{cust_uid}_{page}_basic", "icon_custom_emoji_id": "5890925363067886150"},
+            {"text": "Switch to Pro", "callback_data": f"settings#sb_rl_dotier_{cust_uid}_{page}_pro", "icon_custom_emoji_id": "5805553606635559688"}
+        ],
+        [{"text": "Back", "callback_data": f"settings#sb_rl_u_{cust_uid}_{page}", "icon_custom_emoji_id": "5879857507198833579"}]
+    ]
+    await _send_or_edit_fast(query, tier_text, st_buttons, api_buttons=api_st_buttons, bot=bot)
 
   elif type.startswith("sb_rl_dotier_"):
     parts = type.split('_')
@@ -3285,7 +3350,7 @@ async def settings_query(bot, query):
           f"<u>All settings below are specific to this bot.</u>"
       )
 
-      await _send_or_edit_fast(query, text, buttons, bot=bot)
+      await _send_or_edit_fast(query, text, buttons, api_buttons=api_buttons, bot=bot)
 
   elif type.startswith("sb_toggle_mode_"):
       b_id = type.split("sb_toggle_mode_")[1]
@@ -3341,7 +3406,7 @@ async def settings_query(bot, query):
           f"────────────────────\n"
           f"<i>All settings here are 100% isolated and do not affect Delivery Bot Unlimited Pass configs.</i>"
       )
-      await _send_or_edit_fast(query, text, buttons, bot=bot)
+      await _send_or_edit_fast(query, text, buttons, api_buttons=api_buttons, bot=bot)
 
   elif type.startswith("sb_store_idx_"):
       sub_action = type.split("sb_store_idx_")[1]
@@ -3517,7 +3582,7 @@ async def settings_query(bot, query):
               f"────────────────────\n"
               f"<i>Auto-scanner database channel ke poster aur video files ko pair karke 800+ shows ka catalog create karta hai aur public channel me 600×720 enhanced posters publish karta hai.</i>"
           )
-          await _send_or_edit_fast(query, text, buttons, bot=bot)
+          await _send_or_edit_fast(query, text, buttons, api_buttons=api_buttons, bot=bot)
 
   elif type.startswith("sb_store_v_"):
       b_id = type.split("sb_store_v_")[1]
@@ -3659,7 +3724,11 @@ async def settings_query(bot, query):
           [InlineKeyboardButton("Yes, Purge All", callback_data=f"settings#sb_purge_confirm_{b_id}")],
           [InlineKeyboardButton("Cancel", callback_data=f"settings#sb_view_{b_id}")]
       ]
-      await _send_or_edit_fast(query, text, buttons, bot=bot)
+      api_buttons = [
+          [{"text": "Yes, Purge All", "callback_data": f"settings#sb_purge_confirm_{b_id}", "icon_custom_emoji_id": "5809949600152296075"}],
+          [{"text": "Cancel", "callback_data": f"settings#sb_view_{b_id}", "icon_custom_emoji_id": "5970055887774028039"}]
+      ]
+      await _send_or_edit_fast(query, text, buttons, api_buttons=api_buttons, bot=bot)
 
   elif type.startswith("sb_purge_confirm_"):
       b_id = type.split("sb_purge_confirm_")[1]
@@ -3780,7 +3849,7 @@ async def settings_query(bot, query):
           [{"text": "Back", "callback_data": f"settings#sb_view_{b_id}"}]
       ]
 
-      await _send_or_edit_fast(query, text, buttons, bot=bot)
+      await _send_or_edit_fast(query, text, buttons, api_buttons=api_buttons, bot=bot)
 
   elif type.startswith("sb_set_pdm_"):
       parts = type.split("_")
@@ -4467,7 +4536,7 @@ async def settings_query(bot, query):
           [{"text": "Back", "callback_data": f"settings#sb_view_{b_id}"}]
       ]
 
-      await _send_or_edit_fast(query, txt, btns, bot=bot)
+      await _send_or_edit_fast(query, txt, btns, api_buttons=api_btns, bot=bot)
 
   elif type.startswith("sb_caption_edit_"):
       b_id = type.split("sb_caption_edit_")[1]
@@ -4494,7 +4563,8 @@ async def settings_query(bot, query):
           f"<i>This is how it will look when delivered to users.</i>"
       )
       btns = [[InlineKeyboardButton("Back", callback_data=f"settings#sb_caption_menu_{b_id}")]]
-      await _send_or_edit_fast(query, txt, btns, bot=bot)
+      api_btns = [[{"text": "Back", "callback_data": f"settings#sb_caption_menu_{b_id}"}]]
+      await _send_or_edit_fast(query, txt, btns, api_buttons=api_btns, bot=bot)
 
   elif type.startswith("sb_caption_del_"):
       b_id = type.split("sb_caption_del_")[1]
@@ -4532,7 +4602,8 @@ async def settings_query(bot, query):
           kb.append(del_row)
           api_kb.append(api_del_row)
       kb.append([InlineKeyboardButton("Back", callback_data=f"settings#sb_view_{b_id}")])
-      await _send_or_edit_fast(query, txt, kb, bot=bot)
+      api_kb.append([{"text": "Back", "callback_data": f"settings#sb_view_{b_id}"}])
+      await _send_or_edit_fast(query, txt, kb, api_buttons=api_kb, bot=bot)
 
   elif type.startswith("sb_btn_add_"):
       b_id = type.split("sb_btn_add_")[1]
@@ -4655,7 +4726,7 @@ async def settings_query(bot, query):
       kb.append([InlineKeyboardButton("Back", callback_data=f"settings#sb_view_{b_id}")])
       api_kb.append([{"text": "Back", "callback_data": f"settings#sb_view_{b_id}"}])
 
-      await _send_or_edit_fast(query, text, kb, bot=bot)
+      await _send_or_edit_fast(query, text, kb, api_buttons=api_kb, bot=bot)
 
   elif type.startswith("sb_autodel_set_"):
       rest = type.split("sb_autodel_set_")[1]
@@ -4692,7 +4763,11 @@ async def settings_query(bot, query):
           [InlineKeyboardButton("📤 Export Active Users", callback_data=f"settings#sb_export_{b_id}")],
           [InlineKeyboardButton("Back", callback_data=f"settings#sb_view_{b_id}")]
       ]
-      await _send_or_edit_fast(query, text, kb, bot=bot)
+      api_kb = [
+          [{"text": "Export Active Users", "callback_data": f"settings#sb_export_{b_id}", "icon_custom_emoji_id": "5882207227997066107"}],
+          [{"text": "Back", "callback_data": f"settings#sb_view_{b_id}"}]
+      ]
+      await _send_or_edit_fast(query, text, kb, api_buttons=api_kb, bot=bot)
 
   elif type.startswith("sb_export_"):
       b_id = type.split("sb_export_")[1]
@@ -5134,7 +5209,7 @@ async def settings_query(bot, query):
           f"• [JR] = Join Request mode enabled.</blockquote>"
       )
 
-      await _send_or_edit_fast(query, text, btns, bot=bot)
+      await _send_or_edit_fast(query, text, btns, api_buttons=api_btns, bot=bot)
 
   elif type.startswith("sb_fsub_act_"):
       rest = type[len("sb_fsub_act_"):]
@@ -5535,7 +5610,7 @@ async def settings_query(bot, query):
           [{"text": "Back", "callback_data": "settings#sharebot"}]
       ]
 
-      await _send_or_edit_fast(query, text, btns, bot=bot)
+      await _send_or_edit_fast(query, text, btns, api_buttons=api_buttons, bot=bot)
 
   elif type.startswith("sb_logs_manage_"):
       ch_key = type.split("sb_logs_manage_")[1]
@@ -5573,7 +5648,8 @@ async def settings_query(bot, query):
           btns.append([InlineKeyboardButton("🗑 Remove Channel", callback_data=f"settings#sb_logs_del_{ch_key}")])
           api_btns.append([{"text": "Remove Channel", "callback_data": f"settings#sb_logs_del_{ch_key}", "icon_custom_emoji_id": "6030400221232501136"}])
       btns.append([InlineKeyboardButton("Back", callback_data="settings#sb_logs_channel")])
-      await _send_or_edit_fast(query, text, btns, bot=bot)
+      api_btns.append([{"text": "Back", "callback_data": "settings#sb_logs_channel"}])
+      await _send_or_edit_fast(query, text, btns, api_buttons=api_btns, bot=bot)
 
   elif type.startswith("sb_logs_set_"):
       ch_key = type.split("sb_logs_set_")[1]
@@ -6315,10 +6391,6 @@ async def main_buttons(user_id=None):
       InlineKeyboardButton('• Lang •', callback_data='settings#lang'),
       InlineKeyboardButton('• Shorteners •', callback_data='settings#shorteners')
   ])
-  if is_admin:
-      buttons.append([
-          InlineKeyboardButton('• Owner Panel •', callback_data='settings#owners')
-      ])
   buttons.append([InlineKeyboardButton('❮ Bᴀᴄᴋ', callback_data='back')])
 
   return InlineKeyboardMarkup(buttons)
