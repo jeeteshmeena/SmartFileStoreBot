@@ -6386,11 +6386,10 @@ async def main_buttons(user_id=None):
 
   buttons = [
       [
-          InlineKeyboardButton('• Bots •', callback_data='settings#accounts'),
-          InlineKeyboardButton('• Channels •', callback_data='settings#channels')
+          InlineKeyboardButton('• Channels •', callback_data='settings#channels'),
+          InlineKeyboardButton('• Filters •', callback_data='settings#filters')
       ],
       [
-          InlineKeyboardButton('• Filters •', callback_data='settings#filters'),
           InlineKeyboardButton('• Ex Settings •', callback_data='settings#nextfilters')
       ]
   ]

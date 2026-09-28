@@ -2,18 +2,9 @@ import os
 from config import Config
 
 class Translation(object):
-  START_TXT = """<b><emoji id="6037622221625626773">🤖</emoji> Welcome <a href='tg://user?id={}'>{}</a>!</b>
+  START_TXT = """<b>Welcome <a href='tg://user?id={}'>{}</a>!</b>
 
-<emoji id="5974052327705809756">⚡</emoji> <b>Smart File Store Bot</b> is your all-in-one advanced solution to store, secure, and share Telegram files with cutting-edge features.
-
-<emoji id="6024065724291488135">✨</emoji> <b>Key Features:</b>
-• <emoji id="5776182936638329359">📦</emoji> <b>Smart File Storage:</b> Store files permanently &amp; get instant shareable access links.
-• <emoji id="6023761060786346622">🔗</emoji> <b>Batch Links:</b> Bundle multiple files into a single secure shareable link.
-• <emoji id="6037622221625626773">🤖</emoji> <b>Multi-Bot Delivery:</b> Connect multiple delivery bots to bypass Telegram flood limits.
-• <emoji id="6030410254276106984">🛡</emoji> <b>Smart Protection:</b> Force-subscribe verification, shortener APIs &amp; VIP passes.
-
-<i>Send me any file to store it, or click the buttons below to explore!</i>
-"""
+Send me any file to store it, or use the buttons below."""
 
   HELP_TXT = """<b><u><emoji id="6037622221625626773">🤖</emoji> ʜᴇʟᴘ — ꜱᴍᴀʀᴛ ꜰɪʟᴇ ꜱᴛᴏʀᴇ ʙᴏᴛ</u></b>
 

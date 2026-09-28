@@ -27,34 +27,16 @@ _S = {}   # populated below; we use a plain dict for clarity
 #  START_TXT 
 _S["START_TXT"] = {
     "en": (
-        "<b><emoji id='6037622221625626773'>🤖</emoji> Welcome <a href='tg://user?id={0}'>{1}</a>!</b>\n\n"
-        "<emoji id='5974052327705809756'>⚡</emoji> <b>Smart File Store Bot</b> is your all-in-one advanced solution to store, secure, and share Telegram files with cutting-edge features.\n\n"
-        "<emoji id='6024065724291488135'>✨</emoji> <b>Key Features:</b>\n"
-        "• <emoji id='5776182936638329359'>📦</emoji> <b>Smart File Storage:</b> Store files permanently &amp; get instant shareable access links.\n"
-        "• <emoji id='6023761060786346622'>🔗</emoji> <b>Batch Links:</b> Bundle multiple files into a single secure shareable link.\n"
-        "• <emoji id='6037622221625626773'>🤖</emoji> <b>Multi-Bot Delivery:</b> Connect multiple delivery bots to bypass Telegram flood limits.\n"
-        "• <emoji id='6030410254276106984'>🛡</emoji> <b>Smart Protection:</b> Force-subscribe verification, shortener APIs &amp; VIP passes.\n\n"
-        "<i>Send me any file to store it, or click the buttons below to explore!</i>"
+        "<b>Welcome <a href='tg://user?id={0}'>{1}</a>!</b>\n\n"
+        "Send me any file to store it, or use the buttons below."
     ),
     "hi": (
-        "<b><emoji id='6037622221625626773'>🤖</emoji> स्वागत है <a href='tg://user?id={0}'>{1}</a>!</b>\n\n"
-        "<emoji id='5974052327705809756'>⚡</emoji> <b>Smart File Store Bot</b> में आपका स्वागत है! यह आपकी फ़ाइलों को सुरक्षित रूप से स्टोर और शेयर करने का सबसे आधुनिक और स्मार्ट तरीका है।\n\n"
-        "<emoji id='6024065724291488135'>✨</emoji> <b>प्रमुख विशेषताएँ:</b>\n"
-        "• <emoji id='5776182936638329359'>📦</emoji> <b>स्मार्ट फ़ाइल स्टोर:</b> अपनी फ़ाइलों को स्थायी रूप से सुरक्षित रखें और तुरंत लिंक पाएँ।\n"
-        "• <emoji id='6023761060786346622'>🔗</emoji> <b>बैच लिंक्स (Batch Links):</b> एक साथ कई फ़ाइलों का एक सिंगल शेयर करने योग्य लिंक बनाएँ।\n"
-        "• <emoji id='6037622221625626773'>🤖</emoji> <b>मल्टी-बोट नेटवर्क:</b> डिलीवरी बोट्स जोड़ें और बिना किसी रुकावट के फ़ाइलें भेजें।\n"
-        "• <emoji id='6030410254276106984'>🛡</emoji> <b>सुरक्षा और नियंत्रण:</b> फ़ोर्स-सब्सक्राइब, शॉर्टनर सपोर्ट और कंटेंट प्रोटेक्शन।\n\n"
-        "<i>कोई भी फ़ाइल स्टोर करने के लिए मुझे भेजें, या नीचे दिए गए बटनों का उपयोग करें!</i>"
+        "<b>स्वागत है <a href='tg://user?id={0}'>{1}</a>!</b>\n\n"
+        "कोई भी फ़ाइल स्टोर करने के लिए मुझे भेजें, या नीचे दिए गए बटनों का उपयोग करें।"
     ),
     "hinglish": (
-        "<b><emoji id='6037622221625626773'>🤖</emoji> Welcome <a href='tg://user?id={0}'>{1}</a>!</b>\n\n"
-        "<emoji id='5974052327705809756'>⚡</emoji> <b>Smart File Store Bot</b> me aapka swagat hai! Yahan aap apni files ko safely store aur smartly share kar sakte hain.\n\n"
-        "<emoji id='6024065724291488135'>✨</emoji> <b>Top Features:</b>\n"
-        "• <emoji id='5776182936638329359'>📦</emoji> <b>Smart File Store:</b> Files ko permanent store karo aur instant access links pao.\n"
-        "• <emoji id='6023761060786346622'>🔗</emoji> <b>Batch Links:</b> Multiple files ko ek hi shareable batch link me combine karo.\n"
-        "• <emoji id='6037622221625626773'>🤖</emoji> <b>Multi-Bot Delivery:</b> Multiple bots connect karke rate limits bypass karo.\n"
-        "• <emoji id='6030410254276106984'>🛡</emoji> <b>Advanced Protection:</b> Force sub, link shorteners aur content protection support.\n\n"
-        "<i>Koi bhi file store karne ke liye yahan send karein, ya niche diye buttons use karein!</i>"
+        "<b>Welcome <a href='tg://user?id={0}'>{1}</a>!</b>\n\n"
+        "Koi bhi file store karne ke liye yahan send karein, ya niche diye buttons use karein."
     ),
 }
 
