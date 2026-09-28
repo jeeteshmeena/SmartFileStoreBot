@@ -138,13 +138,16 @@ async def web_server():
     await runner.setup()
     port = int(os.environ.get('PORT', 8080))
     try:
-        site = web.TCPSite(runner, '0.0.0.0', port)
+        try:
+            site = web.TCPSite(runner, '0.0.0.0', port, reuse_address=True, reuse_port=True)
+        except TypeError:
+            site = web.TCPSite(runner, '0.0.0.0', port, reuse_address=True)
         await site.start()
         logging.info(f"Web server started on port {port}")
     except OSError as e:
         logging.warning(f"[WebServer] Port {port} already in use ({e}). Trying fallback port {port + 1}...")
         try:
-            site = web.TCPSite(runner, '0.0.0.0', port + 1)
+            site = web.TCPSite(runner, '0.0.0.0', port + 1, reuse_address=True)
             await site.start()
             logging.info(f"Web server started on fallback port {port + 1}")
         except Exception as ex:

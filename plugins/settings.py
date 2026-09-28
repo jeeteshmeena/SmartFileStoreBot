@@ -43,12 +43,21 @@ async def _ask(bot, user_id: int, timeout: int = 300):
 
 from pyrogram import ContinuePropagation
 
+def _clean_emoji(text: str) -> str:
+    if not text:
+        return ""
+    import re
+    text = re.sub(r'<emoji id=["\'][^"\']*["\']>(.*?)</emoji>', r'\1', text, flags=re.DOTALL)
+    text = re.sub(r'<tg-emoji emoji-id=["\'][^"\']*["\']>(.*?)</tg-emoji>', r'\1', text, flags=re.DOTALL)
+    text = re.sub(r'</?(?:emoji|tg-emoji)[^>]*>', '', text)
+    return text
+
 async def _send_or_edit_fast(query, text, buttons, api_buttons=None, bot=None, msg=None):
     """
     Renders message with custom emojis and buttons.
     If api_buttons is provided with custom emoji icons, attempts Telegram Bot API
     to display button icons; if unavailable or fails, instantly falls back to MTProto
-    with HTML parse mode so text custom emojis (<emoji id="...">) ALWAYS render without lag.
+    with HTML parse mode. If custom emojis fail on MTProto, falls back to clean emojis.
     """
     client = bot or getattr(query, '_client', None)
     target_msg = msg or getattr(query, 'message', None)
@@ -71,7 +80,7 @@ async def _send_or_edit_fast(query, text, buttons, api_buttons=None, bot=None, m
         except Exception:
             pass
 
-    # 2. Fast MTProto edit with HTML parse_mode (preserves text animated custom emojis <emoji id="...">)
+    # 2. Fast MTProto edit with HTML parse_mode
     markup = InlineKeyboardMarkup(buttons)
     if target_msg:
         try:
@@ -81,6 +90,13 @@ async def _send_or_edit_fast(query, text, buttons, api_buttons=None, bot=None, m
             err_str = str(e).lower()
             if "message is not modified" in err_str:
                 return True
+            clean_txt = _clean_emoji(text)
+            if clean_txt != text:
+                try:
+                    await target_msg.edit_text(clean_txt, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+                    return True
+                except Exception:
+                    pass
             try:
                 await target_msg.delete()
             except Exception:
@@ -91,7 +107,12 @@ async def _send_or_edit_fast(query, text, buttons, api_buttons=None, bot=None, m
             await client.send_message(chat_id=chat_id, text=text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
             return True
         except Exception:
-            pass
+            clean_txt = _clean_emoji(text)
+            try:
+                await client.send_message(chat_id=chat_id, text=clean_txt, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+                return True
+            except Exception:
+                pass
     return False
 
 async def _sb_set_text_flow(bot, user_id, query, b_id: str, key: str,

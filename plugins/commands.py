@@ -12,6 +12,20 @@ from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, InputMedi
 
 
 
+import logging
+import re
+
+logger = logging.getLogger(__name__)
+
+def _clean_emoji(text: str) -> str:
+    """Strips custom emoji tags (<emoji id="...">, <tg-emoji ...>) down to fallback unicode emoji."""
+    if not text:
+        return ""
+    text = re.sub(r'<emoji id=["\'][^"\']*["\']>(.*?)</emoji>', r'\1', text, flags=re.DOTALL)
+    text = re.sub(r'<tg-emoji emoji-id=["\'][^"\']*["\']>(.*?)</tg-emoji>', r'\1', text, flags=re.DOTALL)
+    text = re.sub(r'</?(?:emoji|tg-emoji)[^>]*>', '', text)
+    return text
+
 async def _safe_edit(bot, query, **kwargs):
     try:
         await query.answer()
@@ -95,42 +109,86 @@ _STATIC_BUTTONS = [
 
 @Client.on_message(filters.private & filters.command(['start']))
 async def start(client, message):
-    user = message.from_user
-    if not await db.is_user_exist(user.id):
-        await db.add_user(user.id, user.first_name)
-    else:
-        await db.reactivate_user(user.id)
+    try:
+        user = message.from_user
+        if not user:
+            return
+        if not await db.is_user_exist(user.id):
+            await db.add_user(user.id, user.first_name)
+        else:
+            await db.reactivate_user(user.id)
 
-    # Check for deep-link batch delivery
-    if len(message.command) > 1:
-        param = message.command[1].strip()
-        link_data = await db.get_share_link(param)
-        if link_data:
-            from plugins.share_bot import _process_start
-            return await _process_start(client, message)
+        # Check for deep-link batch delivery
+        if len(message.command) > 1:
+            param = message.command[1].strip()
+            link_data = await db.get_share_link(param)
+            if link_data:
+                from plugins.share_bot import _process_start
+                return await _process_start(client, message)
 
-    # Ban check is now handled globally in plugins/banned.py
-    configs = await db.get_configs(user.id)
-    menu_image_id = configs.get('menu_image_id')
-    btns = await _main_buttons(user.id)
+        configs = await db.get_configs(user.id)
+        menu_image_id = configs.get('menu_image_id')
+        btns = await _main_buttons(user.id)
 
-    full_name = f"{user.first_name} {user.last_name}" if getattr(user, 'last_name', None) else user.first_name
-    txt = await t(user.id, 'START_TXT', user.id, full_name)
-    markup = InlineKeyboardMarkup(btns)
+        full_name = f"{user.first_name} {user.last_name}" if getattr(user, 'last_name', None) else user.first_name
+        txt = await t(user.id, 'START_TXT', user.id, full_name)
+        markup = InlineKeyboardMarkup(btns)
 
-    if menu_image_id:
-        await client.send_photo(
-            chat_id=message.chat.id,
-            photo=menu_image_id,
-            caption=txt,
-            reply_markup=markup,
-        )
-    else:
-        await client.send_message(
-            chat_id=message.chat.id,
-            reply_markup=markup,
-            text=txt,
-        )
+        sent = False
+        if menu_image_id:
+            try:
+                await client.send_photo(
+                    chat_id=message.chat.id,
+                    photo=menu_image_id,
+                    caption=txt,
+                    reply_markup=markup,
+                    parse_mode=enums.ParseMode.HTML
+                )
+                sent = True
+            except Exception as pe:
+                clean_txt = _clean_emoji(txt)
+                try:
+                    await client.send_photo(
+                        chat_id=message.chat.id,
+                        photo=menu_image_id,
+                        caption=clean_txt,
+                        reply_markup=markup,
+                        parse_mode=enums.ParseMode.HTML
+                    )
+                    sent = True
+                except Exception:
+                    pass
+
+        if not sent:
+            try:
+                await client.send_message(
+                    chat_id=message.chat.id,
+                    reply_markup=markup,
+                    text=txt,
+                    parse_mode=enums.ParseMode.HTML,
+                    disable_web_page_preview=True
+                )
+            except Exception as me:
+                clean_txt = _clean_emoji(txt)
+                await client.send_message(
+                    chat_id=message.chat.id,
+                    reply_markup=markup,
+                    text=clean_txt,
+                    parse_mode=enums.ParseMode.HTML,
+                    disable_web_page_preview=True
+                )
+    except Exception as e:
+        logger.exception("Error in start handler: %s", e)
+        try:
+            btns = await _main_buttons(message.from_user.id if message.from_user else 0)
+            await message.reply_text(
+                "<b>🤖 Welcome to Smart File Store Bot!</b>\n\n"
+                "Use the menu below to explore features:",
+                reply_markup=InlineKeyboardMarkup(btns),
+                parse_mode=enums.ParseMode.HTML
+            )
+        except Exception:
+            pass
 
 # ==================Restart Function==================
 
@@ -193,46 +251,75 @@ async def back(bot, query):
         await query.answer()
     except Exception:
         pass
-    user_id = query.from_user.id
-    configs = await db.get_configs(user_id)
-    menu_image_id = configs.get('menu_image_id')
-    btns = await _main_buttons(user_id)
-    
-    full_name = f"{query.from_user.first_name} {query.from_user.last_name}" if getattr(query.from_user, 'last_name', None) else query.from_user.first_name
-    txt = await t(user_id, 'START_TXT', user_id, full_name)
-    markup = InlineKeyboardMarkup(btns)
+    try:
+        user_id = query.from_user.id
+        configs = await db.get_configs(user_id)
+        menu_image_id = configs.get('menu_image_id')
+        btns = await _main_buttons(user_id)
+        
+        full_name = f"{query.from_user.first_name} {query.from_user.last_name}" if getattr(query.from_user, 'last_name', None) else query.from_user.first_name
+        txt = await t(user_id, 'START_TXT', user_id, full_name)
+        markup = InlineKeyboardMarkup(btns)
 
-    if menu_image_id:
-        if getattr(query.message, "photo", None):
-            try:
-                await query.message.edit_caption(caption=txt, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-                return
-            except Exception:
-                pass
-        try:
-            await query.message.delete()
-        except Exception:
-            pass
-        await bot.send_photo(chat_id=query.message.chat.id, photo=menu_image_id, caption=txt, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-    else:
-        if getattr(query.message, "photo", None):
-            try:
-                await query.message.delete()
-            except Exception:
-                pass
-            await bot.send_message(chat_id=query.message.chat.id, text=txt, reply_markup=markup, parse_mode=enums.ParseMode.HTML, disable_web_page_preview=True)
-        else:
-            try:
-                await query.message.edit_text(text=txt, reply_markup=markup, disable_web_page_preview=True, parse_mode=enums.ParseMode.HTML)
-            except Exception as e:
-                err_str = str(e).lower()
-                if "message is not modified" in err_str:
-                    return
+        sent = False
+        if menu_image_id:
+            if getattr(query.message, "photo", None):
+                try:
+                    await query.message.edit_caption(caption=txt, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+                    sent = True
+                except Exception:
+                    clean_txt = _clean_emoji(txt)
+                    try:
+                        await query.message.edit_caption(caption=clean_txt, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+                        sent = True
+                    except Exception:
+                        pass
+            if not sent:
                 try:
                     await query.message.delete()
                 except Exception:
                     pass
-                await bot.send_message(chat_id=query.message.chat.id, text=txt, reply_markup=markup, parse_mode=enums.ParseMode.HTML, disable_web_page_preview=True)
+                try:
+                    await bot.send_photo(chat_id=query.message.chat.id, photo=menu_image_id, caption=txt, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+                    sent = True
+                except Exception:
+                    clean_txt = _clean_emoji(txt)
+                    try:
+                        await bot.send_photo(chat_id=query.message.chat.id, photo=menu_image_id, caption=clean_txt, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+                        sent = True
+                    except Exception:
+                        pass
+
+        if not sent:
+            msg = query.message
+            if getattr(msg, "photo", None):
+                try:
+                    await msg.delete()
+                except Exception:
+                    pass
+                try:
+                    await bot.send_message(chat_id=msg.chat.id, text=txt, reply_markup=markup, parse_mode=enums.ParseMode.HTML, disable_web_page_preview=True)
+                except Exception:
+                    clean_txt = _clean_emoji(txt)
+                    await bot.send_message(chat_id=msg.chat.id, text=clean_txt, reply_markup=markup, parse_mode=enums.ParseMode.HTML, disable_web_page_preview=True)
+            else:
+                try:
+                    await query.message.edit_text(text=txt, reply_markup=markup, disable_web_page_preview=True, parse_mode=enums.ParseMode.HTML)
+                except Exception as e:
+                    err_str = str(e).lower()
+                    if "message is not modified" in err_str:
+                        return
+                    clean_txt = _clean_emoji(txt)
+                    try:
+                        await query.message.edit_text(text=clean_txt, reply_markup=markup, disable_web_page_preview=True, parse_mode=enums.ParseMode.HTML)
+                    except Exception:
+                        try:
+                            await query.message.delete()
+                        except Exception:
+                            pass
+                        await bot.send_message(chat_id=query.message.chat.id, text=clean_txt, reply_markup=markup, parse_mode=enums.ParseMode.HTML, disable_web_page_preview=True)
+    except Exception as e:
+        logger.exception("Error in back callback: %s", e)
 
 def get_bot_version():
     try:
