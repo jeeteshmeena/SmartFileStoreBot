@@ -2,83 +2,57 @@ import os
 from config import Config
 
 class Translation(object):
-  START_TXT = """<b>╭──────❰ ✦ 𝐀𝐮𝐭𝐨 𝐅𝐨𝐫𝐰𝐚𝐫𝐝𝐞𝐫 ✦ ❱──────╮
-┃
-┣⊸ 𝐇𝐞𝐥𝐥𝐨 {}
-┃
-┣⊸ 🤖 Aryᴀ Bᴏᴛ [ ᴩᴏwᴇʀғᴜʟ Fᴏʀᴡᴀʀᴅ Tᴏᴏʟ ]
-┃
-┣⊸ <i>ɪ ᴄᴀɴ ғᴏʀᴡᴀʀᴅ ᴀʟʟ ᴍᴇssᴀɢᴇs ғʀᴏᴍ ᴏɴᴇ
-┃  ᴄʜᴀɴɴᴇʟ ᴛᴏ ᴀɴᴏᴛʜᴇʀ ᴄʜᴀɴɴᴇʟ ᴡɪᴛʜ
-┃  ᴍᴏʀᴇ ғᴇᴀᴛᴜʀᴇs.</i>
-┃
-╰────────────────────────────────╯</b>
+  START_TXT = """<b><emoji id="6037622221625626773">🤖</emoji> Welcome <a href='tg://user?id={}'>{}</a>!</b>
+
+<emoji id="5974052327705809756">⚡</emoji> <b>Smart File Store Bot</b> is your all-in-one advanced solution to store, secure, and share Telegram files with cutting-edge features.
+
+<emoji id="6024065724291488135">✨</emoji> <b>Key Features:</b>
+• <emoji id="5776182936638329359">📦</emoji> <b>Smart File Storage:</b> Store files permanently &amp; get instant shareable access links.
+• <emoji id="6023761060786346622">🔗</emoji> <b>Batch Links:</b> Bundle multiple files into a single secure shareable link.
+• <emoji id="6037622221625626773">🤖</emoji> <b>Multi-Bot Delivery:</b> Connect multiple delivery bots to bypass Telegram flood limits.
+• <emoji id="6030410254276106984">🛡</emoji> <b>Smart Protection:</b> Force-subscribe verification, shortener APIs &amp; VIP passes.
+
+<i>Send me any file to store it, or click the buttons below to explore!</i>
 """
 
+  HELP_TXT = """<b><u><emoji id="6037622221625626773">🤖</emoji> ʜᴇʟᴘ — ꜱᴍᴀʀᴛ ꜰɪʟᴇ ꜱᴛᴏʀᴇ ʙᴏᴛ</u></b>
 
-  HELP_TXT = """<b><u>🔆 HELP — Aryᴀ Bᴏᴛ</u></b>
+<b>»  ᴄᴏᴍᴍᴀɴᴅꜱ:</b>
+<code>/start</code>  — ᴄʜᴇᴄᴋ ɪꜰ ɪ'ᴍ ᴀʟɪᴠᴇ &amp; ᴏᴘᴇɴ ᴍᴀɪɴ ᴍᴇɴᴜ
+<code>/settings</code>  — ᴄᴏɴꜰɪɢᴜʀᴇ ʙᴏᴛꜱ, ᴄʜᴀɴɴᴇʟꜱ &amp; ꜰɪʟᴛᴇʀꜱ
+<code>/stats</code>  — ᴠɪᴇᴡ ʙᴏᴛ ꜱᴛᴏʀᴀɢᴇ ꜱᴛᴀᴛɪꜱᴛɪᴄꜱ
+<code>/status</code>  — ᴄʜᴇᴄᴋ ꜱᴇʀᴠᴇʀ ᴘɪɴɢ, ꜱᴘᴇᴇᴅ &amp; ᴜᴘᴛɪᴍᴇ
+<code>/reset</code>  — ʀᴇꜱᴇᴛ ꜱᴇᴛᴛɪɴɢꜱ ᴛᴏ ᴅᴇꜰᴀᴜʟᴛ
 
-<b>📌 Commands:</b>
-<code>/start</code>  — Check if I'm alive
-<code>/forward</code>  — Start batch forwarding
-<code>/jobs</code>  — Manage Live Jobs (background forwarding)
-<code>/cleanmsg</code>  — Bulk delete messages from chats
-<code>/settings</code>  — Configure all settings
-<code>/reset</code>  — Reset settings to default
-
-<b>⚡ Features:</b>
-<b>►</b> Forward from public channels — no admin needed
-<b>►</b> Forward from private channels — via bot/userbot admin
-<b>►</b> Multi-Account: up to 2 Bots + 2 Userbots
-<b>►</b> Live Jobs — background tasks, run parallel to batch forwards
-<b>►</b> New→Old &amp; Old→New forwarding order
-<b>►</b> Filters — skip audio/video/photo/text/sticker/poll etc.
-<b>►</b> Custom caption / remove caption / add buttons
-<b>►</b> Skip duplicate messages
-<b>►</b> Extension / Keyword / Size filters
-<b>►</b> Download mode — bypasses forward restrictions
-<b>►</b> Clean MSG — bulk delete from target channels
+<b>»  ꜰᴇᴀᴛᴜʀᴇꜱ:</b>
+<b>➲ </b> <b>ꜱᴍᴀʀᴛ ꜰɪʟᴇ ꜱᴛᴏʀᴇ:</b> ᴘᴇʀᴍᴀɴᴇɴᴛ ꜱᴛᴏʀᴀɢᴇ ᴡɪᴛʜ ɪɴꜱᴛᴀɴᴛ ꜱʜᴀʀᴇᴀʙʟᴇ ʟɪɴᴋꜱ
+<b>➲ </b> <b>ʙᴀᴛᴄʜ ʟɪɴᴋꜱ:</b> ʙᴜɴᴅʟᴇ ᴍᴜʟᴛɪᴘʟᴇ ꜰɪʟᴇꜱ ɪɴᴛᴏ ᴀ ꜱɪɴɢʟᴇ ꜱᴇᴄᴜʀᴇ ʟɪɴᴋ
+<b>➲ </b> <b>ᴍᴜʟᴛɪ-ʙᴏᴛ ɴᴇᴛᴡᴏʀᴋ:</b> ᴄᴏɴɴᴇᴄᴛ ᴅᴇʟɪᴠᴇʀʏ ʙᴏᴛꜱ ᴛᴏ ʙʏᴘᴀꜱꜱ ꜰʟᴏᴏᴅ ᴡᴀɪᴛꜱ
+<b>➲ </b> <b>ꜱʜᴏʀᴛᴇɴᴇʀ ᴀᴘɪ:</b> ᴀʀᴏʟɪɴᴋꜱ &amp; ᴜʀʟꜱʜᴏʀᴛx ɪɴᴛᴇɢʀᴀᴛɪᴏɴ
+<b>➲ </b> <b>ꜰᴏʀᴄᴇ-ꜱᴜʙ ꜱʏꜱᴛᴇᴍ:</b> ᴍᴀɴᴅᴀᴛᴏʀʏ ᴄʜᴀɴɴᴇʟ ᴊᴏɪɴ ᴠᴇʀɪꜰɪᴄᴀᴛɪᴏɴ
+<b>➲ </b> <b>ᴄᴏɴᴛᴇɴᴛ ᴘʀᴏᴛᴇᴄᴛɪᴏɴ:</b> ᴘʀᴇᴠᴇɴᴛ ꜰᴏʀᴡᴀʀᴅɪɴɢ &amp; ᴄᴏᴘʏɪɴɢ ᴏꜰ ꜰɪʟᴇꜱ
 """
   
-  HOW_USE_TXT = """<b><u>📍 How to Use — Aryᴀ Bᴏᴛ</u></b>
+  HOW_USE_TXT = """<b><u><emoji id="6037622221625626773">🤖</emoji> ʜᴏᴡ ᴛᴏ ᴜꜱᴇ — ꜱᴍᴀʀᴛ ꜰɪʟᴇ ꜱᴛᴏʀᴇ ʙᴏᴛ</u></b>
 
-<b>1️⃣ Add an Account</b>
-  ‣ Go to /settings → ⚙️ Accounts
-  ‣ Add a Bot (send its token) or a Userbot (send session string)
-  ‣ You can add up to 2 Bots + 2 Userbots
+<b>1️⃣ ᴀᴅᴅ ᴀ ᴅᴇʟɪᴠᴇʀʏ ʙᴏᴛ</b>
+  ‣ ɢᴏ ᴛᴏ /ꜱᴇᴛᴛɪɴɢꜱ → <b>• ʙᴏᴛꜱ •</b>
+  ‣ ᴄʟɪᴄᴋ <b>➕ ᴀᴅᴅ ʙᴏᴛ</b> ᴀɴᴅ ꜱᴇɴᴅ ʏᴏᴜʀ ʙᴏᴛ ᴛᴏᴋᴇɴ ꜰʀᴏᴍ @BotFather
+  ‣ ʏᴏᴜ ᴄᴀɴ ᴀᴅᴅ ᴜᴘ ᴛᴏ 10 ʙᴏᴛꜱ ꜰᴏʀ ʜɪɢʜ-ꜱᴘᴇᴇᴅ ꜰɪʟᴇ ᴅᴇʟɪᴠᴇʀʏ
 
-<b>2️⃣ Add a Target Channel</b>
-  ‣ Go to /settings → 📣 Channels
-  ‣ Your Bot/Userbot must be <b>admin</b> in the target
+<b>2️⃣ ᴀᴅᴅ ʏᴏᴜʀ ꜱᴛᴏʀᴀɢᴇ ᴄʜᴀɴɴᴇʟ</b>
+  ‣ ɢᴏ ᴛᴏ /ꜱᴇᴛᴛɪɴɢꜱ → <b>• ᴄʜᴀɴɴᴇʟꜱ •</b>
+  ‣ ᴍᴀᴋᴇ ꜱᴜʀᴇ ʏᴏᴜʀ ʙᴏᴛ ɪꜱ <b>ᴀᴅᴍɪɴ</b> ɪɴ ʏᴏᴜʀ ꜱᴛᴏʀᴀɢᴇ ᴄʜᴀɴɴᴇʟ
 
-<b>3️⃣ Configure Settings</b>
-  ‣ <b>Filters</b> — choose what types of messages to skip
-  ‣ <b>Caption</b> — custom caption or remove it
-  ‣ <b>Forward Tag</b> — show or hide forwarded-from label
-  ‣ <b>Download Mode</b> — re-upload files (bypasses restrictions)
-  ‣ <b>Duplicate Skip</b> — avoid re-forwarding same content
+<b>3️⃣ ꜱᴇᴛ ᴜᴘ ꜱʜᴏʀᴛᴇɴᴇʀꜱ (ᴏᴘᴛɪᴏɴᴀʟ)</b>
+  ‣ ɢᴏ ᴛᴏ /ꜱᴇᴛᴛɪɴɢꜱ → <b>• ꜱʜᴏʀᴛᴇɴᴇʀꜱ •</b>
+  ‣ ᴇɴᴛᴇʀ ʏᴏᴜʀ ᴀʀᴏʟɪɴᴋꜱ ᴏʀ ᴜʀʟꜱʜᴏʀᴛx ᴀᴘɪ ᴋᴇʏꜱ
 
-<b>4️⃣ Batch Forward (/forward)</b>
-  ‣ Choose account → select target → send source link/ID
-  ‣ Choose order (Old→New / New→Old) → set skip count
-  ‣ Verify DOUBLE CHECK → click Yes
+<b>4️⃣ ɢᴇɴᴇʀᴀᴛᴇ ʙᴀᴛᴄʜ ʟɪɴᴋꜱ</b>
+  ‣ ᴄʟɪᴄᴋ <b>• ʙᴀᴛᴄʜ ʟɪɴᴋꜱ •</b> ᴏɴ ᴛʜᴇ ᴍᴀɪɴ ᴍᴇɴᴜ ᴛᴏ ᴄʀᴇᴀᴛᴇ ᴀ ꜱɪɴɢʟᴇ ꜱʜᴀʀᴇᴀʙʟᴇ ʟɪɴᴋ ꜰᴏʀ ᴍᴜʟᴛɪᴘʟᴇ ꜰɪʟᴇꜱ
 
-<b>5️⃣ Live Jobs (/jobs)</b>
-  ‣ Creates a <b>background job</b> that auto-forwards new messages
-  ‣ Works alongside batch forwarding simultaneously
-  ‣ Supports channels, groups, bot private chats, saved messages
-  ‣ Respects your Filters settings
-  ‣ Stop/Start/Delete any job anytime from /jobs
-
-<b>6️⃣ Clean MSG (/cleanmsg)</b>
-  ‣ Select account + target chat(s) + message type
-  ‣ Bulk deletes messages in one go
-
-<b>⚠️ Notes:</b>
-  ‣ Bot account: needs admin in TARGET (and SOURCE if private)
-  ‣ Userbot: needs membership in SOURCE + admin in TARGET
-  ‣ For public channels, a normal Bot works fine
-  ‣ For private/restricted sources, use a Userbot
+<b>5️⃣ ꜱᴛᴏʀᴇ ꜰɪʟᴇꜱ ɪɴꜱᴛᴀɴᴛʟʏ</b>
+  ‣ ꜱɪᴍᴘʟʏ ꜱᴇɴᴅ ᴀɴʏ ꜰɪʟᴇ/ᴍᴇᴅɪᴀ ᴅɪʀᴇᴄᴛʟʏ ᴛᴏ ᴛʜᴇ ʙᴏᴛ ᴛᴏ ɢᴇᴛ ɪᴛꜱ ꜱʜᴀʀᴇᴀʙʟᴇ ꜱᴛᴏʀᴇ ʟɪɴᴋ
 """
   
   ABOUT_TXT = """<b>╭──────❰ 🤖 𝐁𝐨𝐭 𝐃𝐞𝐭𝐚𝐢𝐥𝐬 ❱──────╮

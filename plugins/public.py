@@ -225,7 +225,7 @@ async def run(bot, message):
     # ----- NEW EXPLICIT ACCOUNT SELECTION LOGIC -----
     accounts = await db.get_bots(user_id)
     if not accounts:
-        return await message.reply("You haven't added any accounts yet. Go to /settings -> Accounts.")
+        return await message.reply("You haven't added any bots yet. Go to /settings -> Bots.")
         
     account_buttons = []
     for acc in accounts:

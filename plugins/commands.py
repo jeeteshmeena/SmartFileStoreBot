@@ -484,7 +484,7 @@ async def owner_stats(bot, message):
         "<b></b>\n"
         f"<b>  👥 Total Users     :</b> <code>{total_users}</code>\n"
         f"<b>  📡 Active Forwards  :</b> <code>{active_forwarding}</code>\n"
-        f"<b>  »  Bot Accounts     :</b> <code>{bots_count}</code>\n"
+        f"<b>  »  Connected Bots   :</b> <code>{bots_count}</code>\n"
         f"<b>  »  Channels Saved   :</b> <code>{total_channels_cnt}</code>\n"
         f"<b>  🚫 Banned Users     :</b> <code>{len(temp.BANNED_USERS)}</code>\n"
         "<b></b>\n"

@@ -316,7 +316,7 @@ async def build_owner_panel(uid: int):
         "<b><u>👑 Owner / Admin Control Panel</u></b>\n\n"
         f"<b>Primary Owners:</b> {len(primary)}  |  <b>Co-Owners:</b> {len(co)}\n\n"
         f"<b>Global User Limits:</b>\n"
-        f"  Accounts: <code>{limits.get('max_accounts', 2)}</code>\n\n"
+        f"  Bots: <code>{limits.get('max_accounts', 2)}</code>\n\n"
         "<b>Feature Controls & Workers:</b>\n"
         + ("  Disabled: " + ", ".join(FEATURE_LABELS.get(f, f) for f in disabled) if disabled else "  All features currently enabled.")
         + "\n\n<i>Co-owners have FULL backend admin control. Only primary owners can add/remove other owners.</i>"
@@ -477,8 +477,8 @@ async def owners_cb(bot, query):
         limits = await db.get_global_user_limits()
         ask = await bot.send_message(uid, 
             "<b>⚙️ Set Global User Limits</b>\n\n"
-            f"Current: Accounts={limits.get('max_accounts',2)}\n\n"
-            "Send in format: <code>accounts=4</code>\n"
+            f"Current: Bots={limits.get('max_accounts',2)}\n\n"
+            "Send in format: <code>bots=4</code>\n"
             "Use -1 for unlimited.\n/cancel to abort.")
         try:
             resp = await _ask(bot, uid, timeout=120)
@@ -488,7 +488,7 @@ async def owners_cb(bot, query):
                 return await ask.edit_text("Cancelled.",
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="settings#owners")]]))
             import re as _re
-            kmap = {'accounts': 'max_accounts'}
+            kmap = {'accounts': 'max_accounts', 'bots': 'max_accounts'}
             updates = {}
             for k, dbk in kmap.items():
                 m = _re.search(rf'{k}\s*=\s*(-?\d+)', txt, _re.I)
@@ -499,7 +499,7 @@ async def owners_cb(bot, query):
                 await ask.edit_text(f"✅ Global limits updated: {updates}",
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="settings#owners")]]))
             else:
-                await ask.edit_text("No valid values found. Format: accounts=4",
+                await ask.edit_text("No valid values found. Format: bots=4",
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="settings#owners")]]))
         except asyncio.TimeoutError:
             await ask.edit_text("Timeout.",
@@ -509,7 +509,7 @@ async def owners_cb(bot, query):
         await query.message.delete()
         ask = await bot.send_message(uid,
             "<b>🔧 Set User-Specific Limits</b>\n\n"
-            "Send: <code>USER_ID accounts=2</code>\n"
+            "Send: <code>USER_ID bots=2</code>\n"
             "Use -1 for unlimited. Use /reset USER_ID to reset to global limits.\n"
             "/cancel to abort.")
         try:
@@ -532,7 +532,7 @@ async def owners_cb(bot, query):
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="settings#owners")]]))
             target_uid = int(parts[0])
             rest = parts[1] if len(parts) > 1 else ""
-            kmap2 = {'accounts': 'max_accounts'}
+            kmap2 = {'accounts': 'max_accounts', 'bots': 'max_accounts'}
             updates2 = {}
             for k2, dbk2 in kmap2.items():
                 m2 = _re2.search(rf'{k2}\s*=\s*(-?\d+)', rest, _re2.I)
@@ -647,40 +647,40 @@ async def settings_query(bot, query):
      buttons = [[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="settings#main")]]
      await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
           
-  elif type=="accounts":
-     bots = await db.get_bots(user_id)
-     normal_bots = [b for b in bots if b.get('is_bot', True)]
-     userbots    = [b for b in bots if not b.get('is_bot', True)]
-     
-     buttons = []
-     
-     # ---- BOTS SECTION ----
-     buttons.append([InlineKeyboardButton("Bᴏᴛs", callback_data="settings#noop")])
-     for b in normal_bots:
-         active_mark = "✔️ " if b.get('active') else ""
-         buttons.append([InlineKeyboardButton(f"{active_mark}{b['name']}", callback_data=f"settings#editbot_{b['id']}")])
-     if len(normal_bots) < 10:
-         buttons.append([InlineKeyboardButton('Aᴅᴅ Bᴏᴛ', callback_data="settings#addbot")])
-
-     # ---- USERBOTS SECTION ----
-     buttons.append([InlineKeyboardButton("Usᴇʀʙᴏᴛs", callback_data="settings#noop")])
-     for b in userbots:
-         active_mark = "✔️ " if b.get('active') else ""
-         buttons.append([InlineKeyboardButton(f"{active_mark}{b['name']}", callback_data=f"settings#editbot_{b['id']}")])
-     if len(userbots) < 8:
-         buttons.append([InlineKeyboardButton('Aᴅᴅ Usᴇʀʙᴏᴛ', callback_data="settings#adduserbot")])
-         
-     buttons.append([InlineKeyboardButton('❮ Bᴀᴄᴋ', callback_data="settings#main")])
-     
-     text = (
-         "<b><u>👥 My Accounts</u></b>\n\n"
-         f"<b>🤖 Bots:</b> {len(normal_bots)}/10\n"
-         f"<b>👤 Userbots:</b> {len(userbots)}/8\n\n"
-         "<b>Tap an account to view details or set it active.\n"
-         "✔️ = Currently active for that type.</b>"
-     )
-     await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
-     
+  elif type in ("accounts", "bots"):
+      bots = await db.get_bots(user_id)
+      normal_bots = [b for b in bots if b.get('is_bot', True)]
+      
+      buttons = []
+      api_buttons = []
+      
+      # ---- BOTS SECTION ----
+      buttons.append([InlineKeyboardButton("• Cᴏɴɴᴇᴄᴛᴇᴅ Bᴏᴛs •", callback_data="settings#noop")])
+      api_buttons.append([{"text": "• Connected Bots •", "callback_data": "settings#noop"}])
+      
+      for b in normal_bots:
+          active_mark = "✔️ " if b.get('active') else ""
+          b_name = f"{active_mark}{b['name']}"
+          cb = f"settings#editbot_{b['id']}"
+          buttons.append([InlineKeyboardButton(b_name, callback_data=cb)])
+          api_buttons.append([{"text": b_name, "callback_data": cb, "icon_custom_emoji_id": "6037622221625626773"}])
+          
+      if len(normal_bots) < 10:
+          buttons.append([InlineKeyboardButton('➕ Aᴅᴅ Bᴏᴛ', callback_data="settings#addbot")])
+          api_buttons.append([{"text": "➕ Add Bot", "callback_data": "settings#addbot", "icon_custom_emoji_id": "5807642902066634351"}])
+          
+      buttons.append([InlineKeyboardButton('«  Bᴀᴄᴋ', callback_data="settings#main")])
+      api_buttons.append([{"text": "« Back", "callback_data": "settings#main", "icon_custom_emoji_id": "5879857507198833579"}])
+      
+      text = (
+          "<b><emoji id=\"6037622221625626773\">🤖</emoji> <u>Connected Bots</u></b>\n\n"
+          f"<b>🤖 Active Bots:</b> <code>{len(normal_bots)}/10</code>\n\n"
+          "<i>Manage your bot tokens used for storing and delivering files.\n"
+          "Tap a bot below to view details or set it as active.\n"
+          "✔️ = Currently active bot.</i>"
+      )
+      await _send_or_edit_fast(query, text, buttons, api_buttons=api_buttons, bot=bot)
+      
   elif type=="shorteners":
      apis = await db.get_shortener_apis()
      aro = apis.get("arolinks", "")
@@ -777,13 +777,8 @@ async def settings_query(bot, query):
      await bot.send_message(user_id, "<b>Bot token successfully added to db</b>\nGo back to /settings to configure.")
   
   elif type=="adduserbot":
-     await query.message.delete()
-     res = await CLIENT.add_session(bot, query)
-     if res == "LIMIT_REACHED": return await bot.send_message(user_id, "<b>Limit reached: You can only add up to 8 Userbots.</b>")
-     if res == "EXISTS": return await bot.send_message(user_id, "<b>This session has already been added.</b>")
-     if res != True: return
-     await bot.send_message(user_id, "<b>Session successfully added to db</b>\nGo back to /settings to configure.")
-      
+      return await query.answer("Userbot option has been removed. Only Bots are supported.", show_alert=True)
+       
   elif type.startswith("channels"):
      parts = type.split('_')
      page = int(parts[1]) if len(parts) > 1 else 0
@@ -985,9 +980,9 @@ async def settings_query(bot, query):
      bot_id = type.split('_')[1] if "_" in type else None
      bott = await db.get_bot(user_id, bot_id)
      if not bott:
-         return await query.answer("Account not found!", show_alert=True)
+         return await query.answer("Bot not found!", show_alert=True)
          
-     TEXT = Translation.BOT_DETAILS if bott.get('is_bot', True) else Translation.USER_DETAILS
+     TEXT = Translation.BOT_DETAILS
      buttons = []
      if not bott.get('active'):
          buttons.append([InlineKeyboardButton('Sᴇᴛ Aᴄᴛɪᴠᴇ', callback_data=f"settings#setactive_{bott['id']}")])
@@ -995,15 +990,15 @@ async def settings_query(bot, query):
      buttons.append([InlineKeyboardButton('Rᴇᴍᴏᴠᴇ', callback_data=f"settings#removebot_{bott['id']}")])
      buttons.append([InlineKeyboardButton('❮ Bᴀᴄᴋ', callback_data="settings#accounts")])
      await query.message.edit_text(
-        TEXT.format(bott['name'], bott['id'], bott['username']),
+        TEXT.format(bott['name'], bott['id'], bott.get('username', 'N/A')),
         reply_markup=InlineKeyboardMarkup(buttons))
                                              
   elif type.startswith("setactive"):
      bot_id = type.split('_')[1]
      await db.set_active_bot(user_id, bot_id)
-     await query.answer("Account set as ACTIVE!", show_alert=True)
+     await query.answer("Bot set as ACTIVE!", show_alert=True)
      buttons = [[InlineKeyboardButton('❮ Bᴀᴄᴋ', callback_data="settings#accounts")]]
-     await query.message.edit_text("<b>Successfully changed active account.</b>", reply_markup=InlineKeyboardMarkup(buttons))
+     await query.message.edit_text("<b>Successfully changed active bot.</b>", reply_markup=InlineKeyboardMarkup(buttons))
 
   elif type == "sharebot":
      bots = await db.get_share_bots()
@@ -6370,7 +6365,7 @@ async def main_buttons(user_id=None):
 
   buttons = [
       [
-          InlineKeyboardButton('• Accounts •', callback_data='settings#accounts'),
+          InlineKeyboardButton('• Bots •', callback_data='settings#accounts'),
           InlineKeyboardButton('• Channels •', callback_data='settings#channels')
       ],
       [

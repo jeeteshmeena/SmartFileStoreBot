@@ -443,7 +443,7 @@ async def _create_share_flow(bot, user_id, force_live=False):
             elif step == 65:
                 accounts = await db.get_bots(user_id)
                 if not accounts:
-                    return await bot.send_message(user_id, "<b>❌ No accounts found. Add one in /settings → Accounts first.</b>", reply_markup=ReplyKeyboardRemove())
+                    return await bot.send_message(user_id, "<b>❌ No bots found. Add one in /settings → Bots first.</b>", reply_markup=ReplyKeyboardRemove())
                     
                 userbots = [a for a in accounts if not a.get("is_bot", True)]
                 if not userbots:
