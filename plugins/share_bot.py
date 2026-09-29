@@ -45,16 +45,36 @@ import asyncio
 import time
 import random
 import re
+import os
+import uuid
 from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery, InlineQuery
-from pyrogram.errors import UserNotParticipant
+from pyrogram.errors import UserNotParticipant, FloodWait
 from pyrogram.handlers import MessageHandler, CallbackQueryHandler, ChatJoinRequestHandler, InlineQueryHandler
 from database import db
 from config import Config
 
 logger = logging.getLogger(__name__)
+PM = enums.ParseMode.HTML
+
+from bot import apply_global_button_patches, _infer_style_name
+apply_global_button_patches()
+
+class ButtonStyle:
+    """Telegram Bot API 9.4 colored button styles."""
+    PRIMARY = "primary"  # 🔵 Dark Blue Button
+    SUCCESS = "success"  # 🟢 Green Button
+    DANGER = "danger"    # 🔴 Red Button
+
+try:
+    if not hasattr(enums, "ButtonStyle"):
+        enums.ButtonStyle = ButtonStyle
+except Exception:
+    pass
+
 
 share_clients: dict = {}   # { bot_id_str: Client }
+
 active_downloads: set = set()
 
 # Peer cache: tracks already-resolved chat_ids per client session.
@@ -686,7 +706,7 @@ async def _process_start(client, message):
             if sh:
                 lines.append(f"• <b>{sh['title']}</b> ({sh.get('duration', 'Full Show')})")
                 buttons.append([InlineKeyboardButton(f"📥 Re-Deliver: {sh['title'][:25]}", callback_data=f"store_redeliver_{ps['show_id']}")])
-        buttons.append([InlineKeyboardButton("🔙 Back to Menu", callback_data="store_browse")])
+        buttons.append([InlineKeyboardButton("←︎ Back to Menu", callback_data="store_browse", style="danger")])
         await message.reply_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(buttons), parse_mode=PM)
         return
 
@@ -817,20 +837,22 @@ async def _process_start(client, message):
                                 {
                                     "text": "अनलिमिटेड एक्सेस अनलॉक करें",
                                     "callback_data": "pass#unlock_menu",
-                                    "icon_custom_emoji_id": "6030443364178992166"
+                                    "icon_custom_emoji_id": "6030443364178992166",
+                                    "style": "success"
                                 }
                             ],
                             [
                                 {
                                     "text": "Buy This Story Only",
                                     "url": story_buy_url,
-                                    "icon_custom_emoji_id": "6104800784354909891"
+                                    "icon_custom_emoji_id": "6104800784354909891",
+                                    "style": "primary"
                                 }
                             ]
                         ]
                         unlock_kb = InlineKeyboardMarkup([
-                            [InlineKeyboardButton("🔓 अनलिमिटेड एक्सेस अनलॉक करें", callback_data="pass#unlock_menu")],
-                            [InlineKeyboardButton("💎 Buy This Story Only", url=story_buy_url)]
+                            [InlineKeyboardButton("🔓 अनलिमिटेड एक्सेस अनलॉक करें", callback_data="pass#unlock_menu", style="success")],
+                            [InlineKeyboardButton("💎 Buy This Story Only", url=story_buy_url, style="primary")]
                         ])
                     elif rate_limit_lang == 'hinglish':
                         limit_text = (
@@ -845,20 +867,22 @@ async def _process_start(client, message):
                                 {
                                     "text": "Unlimited Access Unlock Karein",
                                     "callback_data": "pass#unlock_menu",
-                                    "icon_custom_emoji_id": "6030443364178992166"
+                                    "icon_custom_emoji_id": "6030443364178992166",
+                                    "style": "success"
                                 }
                             ],
                             [
                                 {
                                     "text": "Buy This Story Only",
                                     "url": story_buy_url,
-                                    "icon_custom_emoji_id": "6104800784354909891"
+                                    "icon_custom_emoji_id": "6104800784354909891",
+                                    "style": "primary"
                                 }
                             ]
                         ]
                         unlock_kb = InlineKeyboardMarkup([
-                            [InlineKeyboardButton("🔓 Unlimited Access Unlock Karein", callback_data="pass#unlock_menu")],
-                            [InlineKeyboardButton("💎 Buy This Story Only", url=story_buy_url)]
+                            [InlineKeyboardButton("🔓 Unlimited Access Unlock Karein", callback_data="pass#unlock_menu", style="success")],
+                            [InlineKeyboardButton("💎 Buy This Story Only", url=story_buy_url, style="primary")]
                         ])
                     else:
                         limit_text = (
@@ -873,20 +897,22 @@ async def _process_start(client, message):
                                 {
                                     "text": "Unlock Unlimited Access",
                                     "callback_data": "pass#unlock_menu",
-                                    "icon_custom_emoji_id": "6030443364178992166"
+                                    "icon_custom_emoji_id": "6030443364178992166",
+                                    "style": "success"
                                 }
                             ],
                             [
                                 {
                                     "text": "Buy This Story Only",
                                     "url": story_buy_url,
-                                    "icon_custom_emoji_id": "6104800784354909891"
+                                    "icon_custom_emoji_id": "6104800784354909891",
+                                    "style": "primary"
                                 }
                             ]
                         ]
                         unlock_kb = InlineKeyboardMarkup([
-                            [InlineKeyboardButton("🔓 Unlock Unlimited Access", callback_data="pass#unlock_menu")],
-                            [InlineKeyboardButton("💎 Buy This Story Only", url=story_buy_url)]
+                            [InlineKeyboardButton("🔓 Unlock Unlimited Access", callback_data="pass#unlock_menu", style="success")],
+                            [InlineKeyboardButton("💎 Buy This Story Only", url=story_buy_url, style="primary")]
                         ])
                     sent_ok = await send_or_edit_with_custom_icons(
                         client=client,
@@ -999,8 +1025,21 @@ async def _process_start(client, message):
     # Show configurable fetching media (GIF / Photo / Video) or fallback to text
     user_lang = await db.get_language(user_id)
     is_hi = bool(user_lang == 'hi')
-    cancel_lbl = "रद्द करें" if is_hi else "Cᴀɴᴄᴇʟ"
-    cancel_kb = InlineKeyboardMarkup([[InlineKeyboardButton(cancel_lbl, callback_data=f"cancel_dl_{uuid_str}")]])
+    cancel_lbl = "रद्द करें" if is_hi else "Cancel"
+    cancel_api_kb = [[{
+        "text": cancel_lbl,
+        "callback_data": f"cancel_dl_{uuid_str}",
+        "icon_custom_emoji_id": "5774077015388852135",
+        "style": "danger"
+    }]]
+    cancel_kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton(
+            cancel_lbl,
+            callback_data=f"cancel_dl_{uuid_str}",
+            icon_custom_emoji_id="5774077015388852135",
+            style="danger"
+        )
+    ]])
     if is_hi:
         fetch_text = '<emoji id="6215133834149629990">⏳</emoji>  आपकी फ़ाइलें सुरक्षित रूप से प्राप्त की जा रही हैं, कृपया प्रतीक्षा करें...'
     else:
@@ -1013,21 +1052,32 @@ async def _process_start(client, message):
         fid  = fm.get('file_id')
         ftyp = fm.get('media_type', 'photo')
         try:
-            if ftyp == 'animation':
-                sts = await client.send_animation(
-                    user_id, animation=fid, caption=fetch_text,
-                    reply_markup=cancel_kb
-                )
-            elif ftyp == 'video':
-                sts = await client.send_video(
-                    user_id, video=fid, caption=fetch_text,
-                    reply_markup=cancel_kb
-                )
-            else:
-                sts = await client.send_photo(
-                    user_id, photo=fid, caption=fetch_text,
-                    reply_markup=cancel_kb
-                )
+            sent_res = await send_or_edit_with_custom_icons(
+                client=client,
+                chat_id=user_id,
+                text=fetch_text,
+                inline_keyboard=cancel_api_kb,
+                media_id=fid,
+                media_type=ftyp
+            )
+            if isinstance(sent_res, dict):
+                sts = sent_res
+            elif not sent_res:
+                if ftyp == 'animation':
+                    sts = await client.send_animation(
+                        user_id, animation=fid, caption=fetch_text,
+                        reply_markup=cancel_kb
+                    )
+                elif ftyp == 'video':
+                    sts = await client.send_video(
+                        user_id, video=fid, caption=fetch_text,
+                        reply_markup=cancel_kb
+                    )
+                else:
+                    sts = await client.send_photo(
+                        user_id, photo=fid, caption=fetch_text,
+                        reply_markup=cancel_kb
+                    )
             logger.info(f"[Fetch] Sent {ftyp} to user {user_id} via bot {bot_id}")
         except Exception as _fe:
             logger.warning(
@@ -1036,8 +1086,24 @@ async def _process_start(client, message):
             )
             sts = None
 
-    if sts is None:
-        sts = await message.reply_text(fetch_text, reply_markup=cancel_kb)
+    if sts is None or sts is False:
+        try:
+            sent_res = await send_or_edit_with_custom_icons(
+                client=client,
+                chat_id=user_id,
+                text=fetch_text,
+                inline_keyboard=cancel_api_kb
+            )
+            if isinstance(sent_res, dict):
+                sts = sent_res
+        except Exception:
+            sts = None
+        if not sts or sts is True:
+            try:
+                sts = await message.reply_text(fetch_text, reply_markup=cancel_kb)
+            except Exception as _sts_err:
+                logger.warning(f"[Fetch] Fallback reply_text failed: {_sts_err}")
+                sts = None
 
     sent_ids   = []
     fail_count = 0
@@ -1134,7 +1200,12 @@ async def _process_start(client, message):
                 
         if user_blocked:
             break
-        await asyncio.sleep(0.8)
+        try:
+            _delays = await db.get_job_delays()
+            _deliv_delay = float(_delays.get('delivery_bot', 1.0))
+        except Exception:
+            _deliv_delay = 1.0
+        await asyncio.sleep(max(0.1, _deliv_delay))
 
     try:
         active_downloads.discard(dl_id)
@@ -1155,7 +1226,11 @@ async def _process_start(client, message):
     except Exception:
         pass
     try:
-        await sts.delete()
+        sts_msg_id = getattr(sts, "id", None) or (sts.get("message_id") if isinstance(sts, dict) else None)
+        if sts_msg_id:
+            await client.delete_messages(user_id, sts_msg_id)
+        elif hasattr(sts, "delete"):
+            await sts.delete()
     except Exception:
         pass
 
@@ -1206,13 +1281,26 @@ async def _process_start(client, message):
                 f"⧉ Missing a file or looking for a specific episode? Tap \"Stories Chat\" below.\n\n"
                 f"⧉ Having trouble with the bot? Tap \"Arya Help\" below."
             )
-        kb_help = InlineKeyboardMarkup([[
-            InlineKeyboardButton("Arya Help", url="https://t.me/AryaHelpTG"),
-            InlineKeyboardButton("Stories Chat", url="https://t.me/+EAc-6v1bmZ1iMDBl"),
+        help_api_kb = [[
+            {"text": "Arya Help", "url": "https://t.me/AryaHelpTG", "icon_custom_emoji_id": "6030833407339008632", "style": "danger"},
+            {"text": "Stories Chat", "url": "https://t.me/+EAc-6v1bmZ1iMDBl", "icon_custom_emoji_id": "6023911174188308145", "style": "danger"},
+        ]]
+        pyrogram_help_kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("Arya Help", url="https://t.me/AryaHelpTG", icon_custom_emoji_id="6030833407339008632", style="danger"),
+            InlineKeyboardButton("Stories Chat", url="https://t.me/+EAc-6v1bmZ1iMDBl", icon_custom_emoji_id="6023911174188308145", style="danger"),
         ]])
-        notice = await message.reply_text(txt, reply_markup=kb_help)
+        sent_res = await send_or_edit_with_custom_icons(
+            client=client,
+            chat_id=message.chat.id,
+            text=txt,
+            inline_keyboard=help_api_kb
+        )
+        notice_id = sent_res.get("message_id") if isinstance(sent_res, dict) else None
+        if not sent_res or not notice_id:
+            notice = await message.reply_text(txt, reply_markup=pyrogram_help_kb)
+            notice_id = notice.id
         asyncio.create_task(
-            delete_later(client, user_id, sent_ids, notice.id, auto_delete_mins * 60)
+            delete_later(client, user_id, sent_ids, notice_id, auto_delete_mins * 60)
         )
     else:
         suc_tpl = (await db.get_share_bot_text(bot_id, "success_msg") if bot_id else "") or \
@@ -1223,11 +1311,22 @@ async def _process_start(client, message):
                     f"◑ To access them again, simply open the same link button.{fail_note}\n\n"
                     f"⧉ Missing a file or looking for a specific episode? Tap \"Stories Chat\" below.\n\n"
                     f"⧉ Having trouble with the bot? Tap \"Arya Help\" below.")
-        kb_help = InlineKeyboardMarkup([[
-            InlineKeyboardButton("Arya Help", url="https://t.me/AryaHelpTG"),
-            InlineKeyboardButton("Stories Chat", url="https://t.me/+EAc-6v1bmZ1iMDBl"),
+        help_api_kb = [[
+            {"text": "Arya Help", "url": "https://t.me/AryaHelpTG", "icon_custom_emoji_id": "6030833407339008632", "style": "danger"},
+            {"text": "Stories Chat", "url": "https://t.me/+EAc-6v1bmZ1iMDBl", "icon_custom_emoji_id": "6023911174188308145", "style": "danger"},
+        ]]
+        pyrogram_help_kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("Arya Help", url="https://t.me/AryaHelpTG", icon_custom_emoji_id="6030833407339008632", style="danger"),
+            InlineKeyboardButton("Stories Chat", url="https://t.me/+EAc-6v1bmZ1iMDBl", icon_custom_emoji_id="6023911174188308145", style="danger"),
         ]])
-        await message.reply_text(txt, reply_markup=kb_help)
+        sent_res = await send_or_edit_with_custom_icons(
+            client=client,
+            chat_id=message.chat.id,
+            text=txt,
+            inline_keyboard=help_api_kb
+        )
+        if not sent_res:
+            await message.reply_text(txt, reply_markup=pyrogram_help_kb)
 
     # ── Increment global delivery counter + Enhanced bilingual Thank-You ──
     if bot_id:
@@ -1262,12 +1361,20 @@ async def _process_start(client, message):
         f"{don_body}"
     )
     
-    donate_btn = InlineKeyboardMarkup([
+    donate_api_btn = [
         [
-            InlineKeyboardButton("Support via UPI", callback_data="sbd#donate")
+            {"text": "Support Via UPI", "callback_data": "sbd#donate", "icon_custom_emoji_id": "6030443364178992166", "style": "success"}
         ],
         [
-            InlineKeyboardButton("Support via Cashfree", url="https://cfpe.me/aryapremium")
+            {"text": "Support via Cashfree", "url": "https://cfpe.me/aryapremium", "icon_custom_emoji_id": "6030443364178992166", "style": "success"}
+        ]
+    ]
+    donate_btn = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("Support Via UPI", callback_data="sbd#donate", icon_custom_emoji_id="6030443364178992166", style="success")
+        ],
+        [
+            InlineKeyboardButton("Support via Cashfree", url="https://cfpe.me/aryapremium", icon_custom_emoji_id="6030443364178992166", style="success")
         ]
     ])
     try:
@@ -1322,7 +1429,14 @@ async def _process_start(client, message):
             else:
                 await message.reply_text(ad_text, reply_markup=ad_buttons, disable_web_page_preview=True)
         elif show_don:
-            await message.reply_text(thank_txt, reply_markup=donate_btn)
+            sent_don = await send_or_edit_with_custom_icons(
+                client=client,
+                chat_id=message.chat.id,
+                text=thank_txt,
+                inline_keyboard=donate_api_btn
+            )
+            if not sent_don:
+                await message.reply_text(thank_txt, reply_markup=donate_btn)
     except Exception as e:
         logger.warning(f"[ThankYou] send failed: {e}")
 
@@ -1347,43 +1461,43 @@ async def _send_welcome(client, message, bot_id: str = None):
     lbl_help = "सहायता" if is_hi else _sc("Help")
     lbl_about = "बारे में" if is_hi else _sc("About")
     lbl_pass = "पास सब्सक्रिप्शन" if is_hi else "Pass Subscription"
-    lbl_upd = "अपडेट चैनल" if is_hi else _sc("Update Channel")
     lbl_settings = "सेटिंग्स" if is_hi else _sc("Settings")
+
+    clone_link = (await db.get_share_bot_text(bot_id, "clone_link") if bot_id else "") or await db.get_share_clone_link()
+    clone_link = (clone_link or "").strip()
 
     buttons = [
         [
-            InlineKeyboardButton(lbl_help, callback_data="sbd#help"),
-            InlineKeyboardButton(lbl_about, callback_data="sbd#about"),
+            InlineKeyboardButton(lbl_help, callback_data="sbd#help", style="danger"),
+            InlineKeyboardButton(lbl_about, callback_data="sbd#about", style="primary"),
         ],
         [
-            InlineKeyboardButton("👑 " + lbl_pass, callback_data="pass#unlock_menu"),
+            InlineKeyboardButton("👑 " + lbl_pass, callback_data="pass#unlock_menu", style="success"),
         ],
         [
-            InlineKeyboardButton("⚙️ " + lbl_settings, callback_data="sbd#settings"),
-            InlineKeyboardButton("Storyfi", callback_data="sbd#premium"),
+            InlineKeyboardButton("⚙️ " + lbl_settings, callback_data="sbd#settings", style="danger"),
+            InlineKeyboardButton("Storyfi", callback_data="sbd#premium", style="primary"),
         ],
-        [
-            InlineKeyboardButton(lbl_upd, url=UPDATE_LINK),
-        ]
     ]
-    markup = InlineKeyboardMarkup(buttons)
-
     welcome_api_kb = [
         [
-            {"text": lbl_help, "callback_data": "sbd#help", "icon_custom_emoji_id": "6023911174188308145"},
-            {"text": lbl_about, "callback_data": "sbd#about", "icon_custom_emoji_id": "6021625933759257863"}
+            {"text": lbl_help, "callback_data": "sbd#help", "icon_custom_emoji_id": "6023911174188308145", "style": "danger"},
+            {"text": lbl_about, "callback_data": "sbd#about", "icon_custom_emoji_id": "6021625933759257863", "style": "primary"}
         ],
         [
-            {"text": lbl_pass, "callback_data": "pass#unlock_menu", "icon_custom_emoji_id": "6030443364178992166"}
+            {"text": lbl_pass, "callback_data": "pass#unlock_menu", "icon_custom_emoji_id": "6030443364178992166", "style": "success"}
         ],
         [
-            {"text": lbl_settings, "callback_data": "sbd#settings", "icon_custom_emoji_id": "6021637109264160908"},
-            {"text": "Storyfi", "callback_data": "sbd#premium", "icon_custom_emoji_id": "6104800784354909891"}
+            {"text": lbl_settings, "callback_data": "sbd#settings", "icon_custom_emoji_id": "6021637109264160908", "style": "danger"},
+            {"text": "Storyfi", "callback_data": "sbd#premium", "icon_custom_emoji_id": "6104800784354909891", "style": "primary"}
         ],
-        [
-            {"text": lbl_upd, "url": UPDATE_LINK, "icon_custom_emoji_id": "6039422865189638057"}
-        ]
     ]
+    if clone_link:
+        lbl_clone = "Create My own clone"
+        buttons.append([InlineKeyboardButton(lbl_clone, url=clone_link, style="primary")])
+        welcome_api_kb.append([{"text": lbl_clone, "url": clone_link, "icon_custom_emoji_id": "6037622221625626773", "style": "primary"}])
+
+    markup = InlineKeyboardMarkup(buttons)
 
     try:
         if welcome_img:
@@ -1465,7 +1579,7 @@ async def _send_premium_menu(client, query_or_msg, edit: bool = False):
         )
         lbl_bot = "Storyfi Bot"
         lbl_app = "Mini App"
-        lbl_back = "होम पेज पर वापस जाएं"
+        lbl_back = "←︎ होम पेज पर वापस जाएं"
     elif user_lang == 'hinglish':
         txt = (
             '<emoji id="6104800784354909891">✨</emoji> <b>Storyfi Bot & Arya Premium</b> <emoji id="6041919344995209164">❤️</emoji>\n'
@@ -1481,7 +1595,7 @@ async def _send_premium_menu(client, query_or_msg, edit: bool = False):
         )
         lbl_bot = "Storyfi Bot"
         lbl_app = "Mini App"
-        lbl_back = "Back to Home"
+        lbl_back = "←︎ Back to Home"
     else:
         txt = (
             '<emoji id="6104800784354909891">✨</emoji> <b>Storyfi Bot & Arya Premium</b> <emoji id="6041919344995209164">❤️</emoji>\n'
@@ -1497,24 +1611,24 @@ async def _send_premium_menu(client, query_or_msg, edit: bool = False):
         )
         lbl_bot = _sc("Storyfi Bot")
         lbl_app = _sc("Mini App")
-        lbl_back = _sc("Back to Home")
+        lbl_back = "←︎ " + _sc("Back to Home")
 
     premium_api_kb = [
         [
-            {"text": lbl_bot, "url": "https://t.me/StoryfiBot", "icon_custom_emoji_id": "6032594876506312598"},
-            {"text": lbl_app, "url": "https://t.me/UseAryaBot/apminibyarya", "icon_custom_emoji_id": "6007983438294949171"}
+            {"text": lbl_bot, "url": "https://t.me/StoryfiBot", "icon_custom_emoji_id": "6032594876506312598", "style": "primary"},
+            {"text": lbl_app, "url": "https://t.me/UseAryaBot/apminibyarya", "icon_custom_emoji_id": "6007983438294949171", "style": "primary"}
         ],
         [
-            {"text": lbl_back, "callback_data": "sbd#back", "icon_custom_emoji_id": "5879857507198833579"}
+            {"text": lbl_back, "callback_data": "sbd#back", "style": "danger"}
         ]
     ]
     markup = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton(lbl_bot, url="https://t.me/StoryfiBot"),
-            InlineKeyboardButton(lbl_app, url="https://t.me/UseAryaBot/apminibyarya")
+            InlineKeyboardButton(lbl_bot, url="https://t.me/StoryfiBot", style="primary"),
+            InlineKeyboardButton(lbl_app, url="https://t.me/UseAryaBot/apminibyarya", style="primary")
         ],
         [
-            InlineKeyboardButton(lbl_back, callback_data="sbd#back")
+            InlineKeyboardButton(lbl_back, callback_data="sbd#back", style="danger")
         ]
     ])
 
@@ -1555,36 +1669,36 @@ async def _send_help(client, message, bot_id: str = None):
         lbl_support = "सपोर्ट"
         lbl_settings = "सेटिंग्स"
         lbl_upd = "अपडेट चैनल"
-        lbl_back = "होम पेज पर वापस जाएं"
+        lbl_back = "←︎ होम पेज पर वापस जाएं"
     elif user_lang == 'hinglish':
         lbl_support = "Support"
         lbl_settings = "Settings"
         lbl_upd = "Update Channel"
-        lbl_back = "Back to Home"
+        lbl_back = "←︎ Back to Home"
     else:
         lbl_support = _sc("Support")
         lbl_settings = _sc("Settings")
         lbl_upd = _sc("Update Channel")
-        lbl_back = _sc("Back to Home")
+        lbl_back = "←︎ " + _sc("Back to Home")
 
     help_buttons = [
         [
-            InlineKeyboardButton(lbl_support, url=SUPPORT_LINK),
-            InlineKeyboardButton("⚙️ " + lbl_settings, callback_data="sbd#settings")
+            InlineKeyboardButton(lbl_support, url="https://t.me/AryaHelpTG", style="danger"),
+            InlineKeyboardButton("⚙️ " + lbl_settings, callback_data="sbd#settings", style="danger")
         ],
-        [InlineKeyboardButton(lbl_upd, url=UPDATE_LINK)],
-        [InlineKeyboardButton(lbl_back, callback_data="sbd#back")]
+        [InlineKeyboardButton(lbl_upd, url=UPDATE_LINK, style="primary")],
+        [InlineKeyboardButton(lbl_back, callback_data="sbd#back", style="danger")]
     ]
     help_api_kb = [
         [
-            {"text": lbl_support, "url": SUPPORT_LINK, "icon_custom_emoji_id": "6030833407339008632"},
-            {"text": lbl_settings, "callback_data": "sbd#settings", "icon_custom_emoji_id": "6021637109264160908"}
+            {"text": lbl_support, "url": "https://t.me/AryaHelpTG", "icon_custom_emoji_id": "6030833407339008632", "style": "danger"},
+            {"text": lbl_settings, "callback_data": "sbd#settings", "icon_custom_emoji_id": "6021637109264160908", "style": "danger"}
         ],
         [
-            {"text": lbl_upd, "url": UPDATE_LINK, "icon_custom_emoji_id": "6039422865189638057"}
+            {"text": lbl_upd, "url": UPDATE_LINK, "icon_custom_emoji_id": "6039422865189638057", "style": "primary"}
         ],
         [
-            {"text": lbl_back, "callback_data": "sbd#back", "icon_custom_emoji_id": "5879857507198833579"}
+            {"text": lbl_back, "callback_data": "sbd#back", "style": "danger"}
         ]
     ]
     try:
@@ -1635,16 +1749,27 @@ async def _send_about(client, query_or_msg, bot_id: str = None, edit: bool = Tru
             f"<b>‣  ᴠᴇʀꜱɪᴏɴ:</b>  {version}"
         )
 
-    buttons = [[InlineKeyboardButton("«  " + _sc("Back"), callback_data="sbd#back")]]
+    back_txt = "←︎ " + _sc("Back")
+    buttons = [[InlineKeyboardButton(back_txt, callback_data="sbd#back", style="danger")]]
     markup  = InlineKeyboardMarkup(buttons)
+    about_api_kb = [[{"text": back_txt, "callback_data": "sbd#back", "style": "danger"}]]
 
     is_media_msg = bool(getattr(msg, 'photo', None) or getattr(msg, 'animation', None) or getattr(msg, 'video', None))
     try:
-        if is_media_msg:
-            await msg.edit_caption(caption=txt, reply_markup=markup)
-        else:
-            await msg.edit_text(txt, reply_markup=markup,
-                                disable_web_page_preview=True)
+        sent_ok = await send_or_edit_with_custom_icons(
+            client=client,
+            chat_id=msg.chat.id,
+            text=txt,
+            inline_keyboard=about_api_kb,
+            message_id=msg.id,
+            is_media_edit=is_media_msg
+        )
+        if not sent_ok:
+            if is_media_msg:
+                await msg.edit_caption(caption=txt, reply_markup=markup)
+            else:
+                await msg.edit_text(txt, reply_markup=markup,
+                                    disable_web_page_preview=True)
     except Exception as e:
         logger.warning(f"_send_about edit failed: {e}")
 
@@ -1675,36 +1800,36 @@ async def _process_delivery_button(client, query):
             lbl_support = "सपोर्ट"
             lbl_settings = "सेटिंग्स"
             lbl_upd = "अपडेट चैनल"
-            lbl_back = "होम पेज पर वापस जाएं"
+            lbl_back = "←︎ होम पेज पर वापस जाएं"
         elif is_hinglish:
             lbl_support = "Support"
             lbl_settings = "Settings"
             lbl_upd = "Update Channel"
-            lbl_back = "Back to Home"
+            lbl_back = "←︎ Back to Home"
         else:
             lbl_support = _sc("Support")
             lbl_settings = _sc("Settings")
             lbl_upd = _sc("Update Channel")
-            lbl_back = _sc("Back to Home")
+            lbl_back = "←︎ " + _sc("Back to Home")
 
         buttons = [
             [
-                InlineKeyboardButton(lbl_support, url=SUPPORT_LINK),
-                InlineKeyboardButton("⚙️ " + lbl_settings, callback_data="sbd#settings")
+                InlineKeyboardButton(lbl_support, url=SUPPORT_LINK, style="danger"),
+                InlineKeyboardButton("⚙️ " + lbl_settings, callback_data="sbd#settings", style="danger")
             ],
-            [InlineKeyboardButton(lbl_upd, url=UPDATE_LINK)],
-            [InlineKeyboardButton(lbl_back, callback_data="sbd#back")]
+            [InlineKeyboardButton(lbl_upd, url=UPDATE_LINK, style="primary")],
+            [InlineKeyboardButton(lbl_back, callback_data="sbd#back", style="danger")]
         ]
         help_api_kb = [
             [
-                {"text": lbl_support, "url": SUPPORT_LINK, "icon_custom_emoji_id": "6030833407339008632"},
-                {"text": lbl_settings, "callback_data": "sbd#settings", "icon_custom_emoji_id": "6021637109264160908"}
+                {"text": lbl_support, "url": SUPPORT_LINK, "icon_custom_emoji_id": "6030833407339008632", "style": "danger"},
+                {"text": lbl_settings, "callback_data": "sbd#settings", "icon_custom_emoji_id": "6021637109264160908", "style": "danger"}
             ],
             [
-                {"text": lbl_upd, "url": UPDATE_LINK, "icon_custom_emoji_id": "6039422865189638057"}
+                {"text": lbl_upd, "url": UPDATE_LINK, "icon_custom_emoji_id": "6039422865189638057", "style": "primary"}
             ],
             [
-                {"text": lbl_back, "callback_data": "sbd#back", "icon_custom_emoji_id": "5879857507198833579"}
+                {"text": lbl_back, "callback_data": "sbd#back", "style": "danger"}
             ]
         ]
         markup = InlineKeyboardMarkup(buttons)
@@ -1745,7 +1870,7 @@ async def _process_delivery_button(client, query):
             )
             lbl_lang = "भाषा"
             lbl_txns = "मेरे ट्रांसक्शन्स"
-            lbl_back = "वापस"
+            lbl_back = "←︎ वापस"
         elif is_hinglish:
             set_txt = (
                 '<emoji id="6021637109264160908">⚙️</emoji> <b>User Settings</b>\n'
@@ -1754,7 +1879,7 @@ async def _process_delivery_button(client, query):
             )
             lbl_lang = "Language"
             lbl_txns = "My Transactions"
-            lbl_back = "Back"
+            lbl_back = "←︎ Back"
         else:
             set_txt = (
                 '<emoji id="6021637109264160908">⚙️</emoji> <b>User Settings</b>\n'
@@ -1763,17 +1888,17 @@ async def _process_delivery_button(client, query):
             )
             lbl_lang = "Language"
             lbl_txns = "My Transactions"
-            lbl_back = "Back"
+            lbl_back = "←︎ " + _sc("Back")
 
         set_buttons = [
-            [InlineKeyboardButton(lbl_lang, callback_data="pass#lang_menu")],
-            [InlineKeyboardButton(lbl_txns, callback_data="pass#my_transactions")],
-            [InlineKeyboardButton(lbl_back, callback_data="sbd#back")]
+            [InlineKeyboardButton(lbl_lang, callback_data="pass#lang_menu", style="danger")],
+            [InlineKeyboardButton(lbl_txns, callback_data="pass#my_transactions", style="primary")],
+            [InlineKeyboardButton(lbl_back, callback_data="sbd#back", style="danger")]
         ]
         set_api_kb = [
-            [{"text": lbl_lang, "callback_data": "pass#lang_menu", "icon_custom_emoji_id": "6030768072296502910"}],
-            [{"text": lbl_txns, "callback_data": "pass#my_transactions", "icon_custom_emoji_id": "6035297458907519073"}],
-            [{"text": lbl_back, "callback_data": "sbd#back", "icon_custom_emoji_id": "5879857507198833579"}]
+            [{"text": lbl_lang, "callback_data": "pass#lang_menu", "icon_custom_emoji_id": "6030768072296502910", "style": "danger"}],
+            [{"text": lbl_txns, "callback_data": "pass#my_transactions", "icon_custom_emoji_id": "6035297458907519073", "style": "primary"}],
+            [{"text": lbl_back, "callback_data": "sbd#back", "style": "danger"}]
         ]
         try:
             if is_media_msg:
@@ -2038,43 +2163,43 @@ async def _process_delivery_button(client, query):
         lbl_help = "सहायता" if is_hi else _sc("Help")
         lbl_about = "बारे में" if is_hi else _sc("About")
         lbl_pass = "पास सब्सक्रिप्शन" if is_hi else "Pass Subscription"
-        lbl_upd = "अपडेट चैनल" if is_hi else _sc("Update Channel")
         lbl_settings = "सेटिंग्स" if is_hi else _sc("Settings")
+
+        clone_link = (await db.get_share_bot_text(bot_id, "clone_link") if bot_id else "") or await db.get_share_clone_link()
+        clone_link = (clone_link or "").strip()
 
         buttons = [
             [
-                InlineKeyboardButton(lbl_help, callback_data="sbd#help"),
-                InlineKeyboardButton(lbl_about, callback_data="sbd#about"),
+                InlineKeyboardButton(lbl_help, callback_data="sbd#help", style="danger"),
+                InlineKeyboardButton(lbl_about, callback_data="sbd#about", style="primary"),
             ],
             [
-                InlineKeyboardButton("👑 " + lbl_pass, callback_data="pass#unlock_menu"),
+                InlineKeyboardButton("👑 " + lbl_pass, callback_data="pass#unlock_menu", style="success"),
             ],
             [
-                InlineKeyboardButton("⚙️ " + lbl_settings, callback_data="sbd#settings"),
-                InlineKeyboardButton("Storyfi", callback_data="sbd#premium"),
+                InlineKeyboardButton("⚙️ " + lbl_settings, callback_data="sbd#settings", style="danger"),
+                InlineKeyboardButton("Storyfi", callback_data="sbd#premium", style="primary"),
             ],
-            [
-                InlineKeyboardButton(lbl_upd, url=UPDATE_LINK),
-            ]
         ]
-        markup = InlineKeyboardMarkup(buttons)
-
         welcome_api_kb = [
             [
-                {"text": lbl_help, "callback_data": "sbd#help", "icon_custom_emoji_id": "6023911174188308145"},
-                {"text": lbl_about, "callback_data": "sbd#about", "icon_custom_emoji_id": "6021625933759257863"}
+                {"text": lbl_help, "callback_data": "sbd#help", "icon_custom_emoji_id": "6023911174188308145", "style": "danger"},
+                {"text": lbl_about, "callback_data": "sbd#about", "icon_custom_emoji_id": "6021625933759257863", "style": "primary"}
             ],
             [
-                {"text": lbl_pass, "callback_data": "pass#unlock_menu", "icon_custom_emoji_id": "6030443364178992166"}
+                {"text": lbl_pass, "callback_data": "pass#unlock_menu", "icon_custom_emoji_id": "6030443364178992166", "style": "success"}
             ],
             [
-                {"text": lbl_settings, "callback_data": "sbd#settings", "icon_custom_emoji_id": "6021637109264160908"},
-                {"text": "Storyfi", "callback_data": "sbd#premium", "icon_custom_emoji_id": "6104800784354909891"}
+                {"text": lbl_settings, "callback_data": "sbd#settings", "icon_custom_emoji_id": "6021637109264160908", "style": "danger"},
+                {"text": "Storyfi", "callback_data": "sbd#premium", "icon_custom_emoji_id": "6104800784354909891", "style": "primary"}
             ],
-            [
-                {"text": lbl_upd, "url": UPDATE_LINK, "icon_custom_emoji_id": "6039422865189638057"}
-            ]
         ]
+        if clone_link:
+            lbl_clone = "Create My own clone"
+            buttons.append([InlineKeyboardButton(lbl_clone, url=clone_link, style="primary")])
+            welcome_api_kb.append([{"text": lbl_clone, "url": clone_link, "icon_custom_emoji_id": "6037622221625626773", "style": "primary"}])
+
+        markup = InlineKeyboardMarkup(buttons)
         try:
             if is_media_msg:
                 sent_ok = await send_or_edit_with_custom_icons(
@@ -2111,9 +2236,15 @@ async def _process_delivery_cancel(client, query):
         active_downloads.discard(dl_id)
         await query.answer("Download cancelled.", show_alert=True)
         try:
-            await query.message.edit_text("<b>🚫 Dᴏᴡɴʟᴏᴀᴅ Cᴀɴᴄᴇʟʟᴇᴅ.</b>")
+            if getattr(query.message, 'photo', None) or getattr(query.message, 'animation', None) or getattr(query.message, 'video', None):
+                await query.message.edit_caption("<b>🚫 Dᴏᴡɴʟᴏᴀᴅ Cᴀɴᴄᴇʟʟᴇᴅ.</b>")
+            else:
+                await query.message.edit_text("<b>🚫 Dᴏᴡɴʟᴏᴀᴅ Cᴀɴᴄᴇʟʟᴇᴅ.</b>")
         except Exception:
-            pass
+            try:
+                await query.message.edit_text("<b>🚫 Dᴏᴡɴʟᴏᴀᴅ Cᴀɴᴄᴇʟʟᴇᴅ.</b>")
+            except Exception:
+                pass
     else:
         await query.answer("Already finished or cancelled.", show_alert=True)
 
@@ -2627,12 +2758,12 @@ async def _send_random_cooldown_reminder(
     text = random.choice(templates)
     
     api_kb = [
-        [{"text": btn_unlock, "callback_data": "pass#unlock_menu", "icon_custom_emoji_id": "6030443364178992166"}],
-        [{"text": btn_supp, "url": "https://t.me/AryaHelpTG", "icon_custom_emoji_id": "6030833407339008632"}]
+        [{"text": btn_unlock, "callback_data": "pass#unlock_menu", "icon_custom_emoji_id": "6030443364178992166", "style": "success"}],
+        [{"text": btn_supp, "url": "https://t.me/AryaHelpTG", "icon_custom_emoji_id": "6030833407339008632", "style": "danger"}]
     ]
     pyrogram_kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"🔓 {btn_unlock}", callback_data="pass#unlock_menu")],
-        [InlineKeyboardButton(f"🔒 {btn_supp}", url="https://t.me/AryaHelpTG")]
+        [InlineKeyboardButton(f"🔓 {btn_unlock}", callback_data="pass#unlock_menu", style="success")],
+        [InlineKeyboardButton(f"🔒 {btn_supp}", url="https://t.me/AryaHelpTG", style="danger")]
     ])
 
     try:
@@ -2805,7 +2936,7 @@ async def _handle_share_bot_screenshot_message(client, message):
     u_last = message.from_user.last_name or ""
     u_name = f"{u_first} {u_last}".strip() or "Customer"
     username = f"@{message.from_user.username}" if message.from_user.username else "None"
-    prof_link = f"https://t.me/{message.from_user.username}" if message.from_user.username else f"tg://openmessage?user_id={user_id}"
+    prof_link = f"https://t.me/{message.from_user.username}" if message.from_user.username else f"tg://user?id={user_id}"
 
     from database import format_duration_verbose, parse_duration_to_seconds
     dur_sec = parse_duration_to_seconds(dur_key, default_unit='d')
@@ -3064,12 +3195,12 @@ async def _poll_upi_payment(
                     lbl_supp = "Support"
 
                 success_kb = InlineKeyboardMarkup([
-                    [InlineKeyboardButton(f"📜 {lbl_txns}", callback_data="pass#my_transactions")],
-                    [InlineKeyboardButton(f"🔒 {lbl_supp}", url="https://t.me/AryaHelpTG")]
+                    [InlineKeyboardButton(f"📜 {lbl_txns}", callback_data="pass#my_transactions", style="primary")],
+                    [InlineKeyboardButton(f"🔒 {lbl_supp}", url="https://t.me/AryaHelpTG", style="danger")]
                 ])
                 success_api_kb = [
-                    [{"text": lbl_txns, "callback_data": "pass#my_transactions", "icon_custom_emoji_id": "6035297458907519073"}],
-                    [{"text": lbl_supp, "url": "https://t.me/AryaHelpTG", "icon_custom_emoji_id": "6030833407339008632"}]
+                    [{"text": lbl_txns, "callback_data": "pass#my_transactions", "icon_custom_emoji_id": "6035297458907519073", "style": "primary"}],
+                    [{"text": lbl_supp, "url": "https://t.me/AryaHelpTG", "icon_custom_emoji_id": "6030833407339008632", "style": "danger"}]
                 ]
 
                 ui_updated = False
@@ -3279,12 +3410,12 @@ async def _handle_share_bot_utr_message(client, message):
         )
     else:
         retry_kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔄 Re-Verify Reference", callback_data=f"pass#upirecheck_{utr}_{dur_key}_{expected_amount}")],
-            [InlineKeyboardButton("« Back", callback_data="pass#unlock_menu")]
+            [InlineKeyboardButton("🔄 Re-Verify Reference", callback_data=f"pass#upirecheck_{utr}_{dur_key}_{expected_amount}", style="primary")],
+            [InlineKeyboardButton("←︎ Back", callback_data="pass#unlock_menu", style="danger")]
         ])
         retry_api_kb = [
-            [{"text": "Re-Verify Reference", "callback_data": f"pass#upirecheck_{utr}_{dur_key}_{expected_amount}", "icon_custom_emoji_id": "5807492110059838726"}],
-            [{"text": "Back", "callback_data": "pass#unlock_menu", "icon_custom_emoji_id": "5879857507198833579"}]
+            [{"text": "Re-Verify Reference", "callback_data": f"pass#upirecheck_{utr}_{dur_key}_{expected_amount}", "icon_custom_emoji_id": "5807492110059838726", "style": "primary"}],
+            [{"text": "←︎ Back", "callback_data": "pass#unlock_menu", "style": "danger"}]
         ]
         err_msg = res.get("error", "Payment reference number not found in bank email notifications yet.")
         not_found_txt = (
@@ -3618,14 +3749,14 @@ async def schedule_pass_payment_reminder(
         rem_buttons = []
         rem_api_buttons = []
         if pay_url:
-            rem_buttons.append([InlineKeyboardButton(btn_pay_text, url=pay_url)])
-            rem_api_buttons.append([{"text": btn_pay_text, "url": pay_url, "icon_custom_emoji_id": "5807527002374151568"}])
+            rem_buttons.append([InlineKeyboardButton(btn_pay_text, url=pay_url, style="success")])
+            rem_api_buttons.append([{"text": btn_pay_text, "url": pay_url, "icon_custom_emoji_id": "5807527002374151568", "style": "success"}])
         elif "UPI" in gateway_name:
-            rem_buttons.append([InlineKeyboardButton(btn_status_text, callback_data=f"pass#upistatus_{order_id}_{dur_key}_{dyn_amount}")])
-            rem_api_buttons.append([{"text": btn_status_text, "callback_data": f"pass#upistatus_{order_id}_{dur_key}_{dyn_amount}", "icon_custom_emoji_id": "5807492110059838726"}])
+            rem_buttons.append([InlineKeyboardButton(btn_status_text, callback_data=f"pass#upistatus_{order_id}_{dur_key}_{dyn_amount}", style="success")])
+            rem_api_buttons.append([{"text": btn_status_text, "callback_data": f"pass#upistatus_{order_id}_{dur_key}_{dyn_amount}", "icon_custom_emoji_id": "5807492110059838726", "style": "success"}])
 
-        rem_buttons.append([InlineKeyboardButton(btn_supp_text, url="https://t.me/AryaHelpTG")])
-        rem_api_buttons.append([{"text": btn_supp_text, "url": "https://t.me/AryaHelpTG", "icon_custom_emoji_id": "6030833407339008632"}])
+        rem_buttons.append([InlineKeyboardButton(btn_supp_text, url="https://t.me/AryaHelpTG", style="danger")])
+        rem_api_buttons.append([{"text": btn_supp_text, "url": "https://t.me/AryaHelpTG", "icon_custom_emoji_id": "6030833407339008632", "style": "danger"}])
 
         sent_ok = await send_or_edit_with_custom_icons(
             client=client,
@@ -3827,12 +3958,79 @@ def _normalize_api_keyboard(inline_keyboard):
                     b["switch_inline_query"] = btn.switch_inline_query
                 if getattr(btn, "web_app", None) is not None:
                     b["web_app"] = {"url": getattr(btn.web_app, "url", "")}
-                if hasattr(btn, "icon_custom_emoji_id") and btn.icon_custom_emoji_id:
-                    b["icon_custom_emoji_id"] = str(btn.icon_custom_emoji_id)
+                icon_id = getattr(btn, "_api_icon_custom_emoji_id", None) or getattr(btn, "icon_custom_emoji_id", None)
+                if icon_id:
+                    b["icon_custom_emoji_id"] = str(icon_id)
+                if hasattr(btn, "style") and btn.style:
+                    b["style"] = str(getattr(btn.style, "value", btn.style)).lower().strip()
+
+            raw_text = b.get("text", "").strip()
+            raw_cb = str(b.get("callback_data", "") or "")
+            raw_url = str(b.get("url", "") or "")
+            lower_text = raw_text.lower()
+
+            # 1. Back button standardization: wipe out custom emoji, strip old arrows/emojis, prepend "←︎ " (\u2190\ufe0e )
+            is_back = False
+            if (
+                re.search(r'\b(?:back|ʙᴀᴄᴋ|वापस)\b', raw_text, re.IGNORECASE) or
+                "back to" in lower_text or
+                "वापस" in raw_text or
+                (raw_cb in ("sbd#back", "pass#unlock_menu", "sbd#home", "store_browse") and any(k in lower_text or k in raw_text for k in ("back", "होम", "वापस", "home", "menu", "details"))) or
+                raw_cb.endswith(("_back", "#back"))
+            ):
+                is_back = True
+
+            if is_back:
+                b.pop("icon_custom_emoji_id", None)
+                cleaned = re.sub(r'^(?:[←«»›‹❮◀⬅🔙\u25c0\u2b05\u2190-\u2199]|\ufe0e|\ufe0f|\s)+', '', raw_text).strip()
+                b["text"] = f"\u2190\ufe0e {cleaned}"
+                b["style"] = "danger"
+            elif (
+                raw_cb.startswith(("cancel_dl_", "pass#cancel_")) or
+                raw_cb in ("cancel", "cancel_dl") or
+                re.search(r'\b(?:cancel|cᴀɴᴄᴇʟ|कैंसिल|रद्द)\b', raw_text, re.IGNORECASE) or
+                "cancel" in lower_text or
+                "cᴀɴᴄᴇʟ" in raw_text or
+                "रद्द" in raw_text or
+                "कैंसिल" in raw_text
+            ):
+                b["style"] = "danger"
+                b["icon_custom_emoji_id"] = "5774077015388852135"
+            elif (
+                "arya help" in lower_text or
+                "aryahelptg" in raw_url.lower() or
+                raw_cb == "sbd#help"
+            ):
+                b["style"] = "danger"
+                b["icon_custom_emoji_id"] = "6030833407339008632"
+            elif (
+                "stories chat" in lower_text or
+                "+eac-6v1bmz1imdbl" in raw_url.lower()
+            ):
+                b["style"] = "danger"
+                b["icon_custom_emoji_id"] = "6023911174188308145"
+            elif (
+                "support via upi" in lower_text
+            ):
+                b["style"] = "success"
+                b["icon_custom_emoji_id"] = "6030443364178992166"
+            elif (
+                "support via cashfree" in lower_text or
+                ("cfpe.me" in raw_url.lower() and "support" in lower_text)
+            ):
+                b["style"] = "success"
+                b["icon_custom_emoji_id"] = "6030443364178992166"
+
             if b.get("icon_custom_emoji_id"):
                 b["text"] = re.sub(r'^(?:[←«»›◀⬅🔙\u25c0\u2b05]|\ufe0f)+\s*', '', b.get("text", "")).strip()
                 if not b["text"]:
                     b["text"] = " "
+            if "style" in b and b["style"]:
+                b["style"] = str(getattr(b["style"], "value", b["style"])).lower().strip()
+                if b["style"] not in ("primary", "success", "danger"):
+                    b.pop("style", None)
+            if not b.get("style") and raw_cb:
+                b["style"] = _infer_style_name(raw_text, raw_cb)
             r.append(b)
         res.append(r)
     return res
@@ -3849,7 +4047,30 @@ def _strip_api_keyboard_icons(inline_keyboard):
     return res
 
 
-_bot_supports_button_icons = {}  # {bot_token: bool}
+_bot_custom_emoji_supported: dict[str, bool] = {}
+_rl_cfg_cache: dict[str, any] = {'data': None, 'ts': 0}
+_user_lang_cache: dict[int, tuple[str, float]] = {}
+
+
+async def get_cached_rl_config() -> dict:
+    now = time.time()
+    if _rl_cfg_cache['data'] is not None and (now - _rl_cfg_cache['ts']) < 20.0:
+        return _rl_cfg_cache['data']
+    cfg = await db.get_delivery_rate_limit_config()
+    _rl_cfg_cache['data'] = cfg or {}
+    _rl_cfg_cache['ts'] = now
+    return _rl_cfg_cache['data']
+
+
+async def get_cached_user_lang(user_id: int) -> str:
+    now = time.time()
+    cached = _user_lang_cache.get(user_id)
+    if cached and (now - cached[1]) < 60.0:
+        return cached[0]
+    lang = await db.get_language(user_id)
+    _user_lang_cache[user_id] = (lang, now)
+    return lang
+
 
 async def send_or_edit_with_custom_icons(
     client,
@@ -3865,9 +4086,10 @@ async def send_or_edit_with_custom_icons(
 ) -> any:
     """
     Sends or edits a message using Telegram Bot API HTTP endpoint.
-    This enables `icon_custom_emoji_id` on inline keyboard buttons (if bot supports it)
-    and custom animated emojis (<tg-emoji>) in text and captions.
-    Fast-fails and caches unsupported button icons so retries do not lag the event loop.
+    This enables `icon_custom_emoji_id` on inline keyboard buttons and
+    custom animated emojis (<tg-emoji>) in text and captions across Photos/Animations/Videos.
+    If the bot is not authorized to send button icons (Telegram 400 BUTTON_CUSTOM_EMOJI_INVALID),
+    it automatically caches this and retries via Bot API with icons stripped so text custom emojis (<tg-emoji>) ALWAYS succeed with 0 latency.
     """
     import aiohttp
     import json
@@ -3886,7 +4108,7 @@ async def send_or_edit_with_custom_icons(
         bot_token = getattr(Config, "BOT_TOKEN", "") or os.environ.get("BOT_TOKEN", "") or getattr(Config, "MGMT_BOT_TOKEN", "") or os.environ.get("MGMT_BOT_TOKEN", "")
 
     if not bot_token:
-        logger.warning(f"[CustomEmojiAPI] ❌ No bot token resolved for client {getattr(getattr(client, 'me', None), 'username', getattr(client, 'name', 'bot'))}. Falling back to MTProto.")
+        logger.warning(f"[CustomEmojiAPI] ❌ No bot token resolved for client {getattr(getattr(client, 'me', None), 'username', getattr(client, 'name', 'bot'))} (client.id={getattr(getattr(client, 'me', None), 'id', getattr(client, 'id', None))}). Falling back to MTProto.")
         return False
 
     try:
@@ -3897,11 +4119,13 @@ async def send_or_edit_with_custom_icons(
 
     # Convert Pyrogram <emoji id="..."> tags to Bot API <tg-emoji emoji-id="..."> tags
     api_text = re.sub(r'<emoji id="(\d+)">([^<]*)</emoji>', r'<tg-emoji emoji-id="\1">\2</tg-emoji>', text or "")
+    plain_text = re.sub(r'<(?:tg-)?emoji[^>]*>([^<]*)</(?:tg-)?emoji>', r'\1', api_text)
     url = f"https://api.telegram.org/bot{bot_token}/"
     norm_kb = _normalize_api_keyboard(inline_keyboard)
 
-    # If known that bot cannot use button icons, strip immediately without failing
-    if _bot_supports_button_icons.get(bot_token) is False:
+    token_key = bot_token[:15] if bot_token else "default"
+    supports_btn_icons = _bot_custom_emoji_supported.get(token_key, True)
+    if not supports_btn_icons:
         norm_kb = _strip_api_keyboard_icons(norm_kb)
 
     if photo_bytes:
@@ -3913,24 +4137,24 @@ async def send_or_edit_with_custom_icons(
             form.add_field("reply_markup", json.dumps({"inline_keyboard": norm_kb}))
             form.add_field("photo", photo_bytes, filename="qr.png", content_type="image/png")
             session = _get_shared_bot_api_session()
-            async with session.post(url + "sendPhoto", data=form, timeout=aiohttp.ClientTimeout(total=2.5)) as resp:
+            async with session.post(url + "sendPhoto", data=form, timeout=aiohttp.ClientTimeout(total=3.0)) as resp:
                 data = await resp.json()
                 if data.get("ok"):
                     logger.info(f"[CustomEmojiAPI] ✅ Photo sent successfully via Bot API to {c_id}")
                     return data.get("result", True)
                 
-                # Retry with stripped button icons if custom emojis failed
+                # Retry with stripped button icons ONLY if custom emojis failed
                 err_desc = str(data.get("description", ""))
-                if "BUTTON_CUSTOM_EMOJI" in err_desc or "custom emoji" in err_desc.lower():
-                    _bot_supports_button_icons[bot_token] = False
+                if "BUTTON_CUSTOM_EMOJI" in err_desc or "CUSTOM_EMOJI" in err_desc or "DOCUMENT_INVALID" in err_desc:
+                    _bot_custom_emoji_supported[token_key] = False
                     stripped_kb = _strip_api_keyboard_icons(norm_kb)
                     form_retry = aiohttp.FormData()
                     form_retry.add_field("chat_id", str(c_id))
-                    form_retry.add_field("caption", api_text)
+                    form_retry.add_field("caption", plain_text)
                     form_retry.add_field("parse_mode", parse_mode)
                     form_retry.add_field("reply_markup", json.dumps({"inline_keyboard": stripped_kb}))
                     form_retry.add_field("photo", photo_bytes, filename="qr.png", content_type="image/png")
-                    async with session.post(url + "sendPhoto", data=form_retry, timeout=aiohttp.ClientTimeout(total=2.5)) as resp_r:
+                    async with session.post(url + "sendPhoto", data=form_retry, timeout=aiohttp.ClientTimeout(total=3.0)) as resp_r:
                         data_r = await resp_r.json()
                         if data_r.get("ok"):
                             logger.info(f"[CustomEmojiAPI] ✅ Photo sent (retry stripped icons) via Bot API to {c_id}")
@@ -3940,7 +4164,8 @@ async def send_or_edit_with_custom_icons(
             logger.info(f"[CustomEmojiAPI] Bot API sendPhoto bytes exception: {e}")
         return False
 
-    def _build_payload(kb):
+    def _build_payload(kb, txt_override=None):
+        use_txt = txt_override if txt_override is not None else api_text
         p = {
             "chat_id": c_id,
             "parse_mode": parse_mode,
@@ -3949,7 +4174,7 @@ async def send_or_edit_with_custom_icons(
             }
         }
         if media_id and not is_media_edit:
-            p["caption"] = api_text
+            p["caption"] = use_txt
             if media_type == "animation":
                 mth = "sendAnimation"
                 p["animation"] = media_id
@@ -3962,24 +4187,26 @@ async def send_or_edit_with_custom_icons(
         elif is_media_edit and m_id:
             mth = "editMessageCaption"
             p["message_id"] = m_id
-            p["caption"] = api_text
+            p["caption"] = use_txt
         elif m_id:
             mth = "editMessageText"
             p["message_id"] = m_id
-            p["text"] = api_text
+            p["text"] = use_txt
         else:
             mth = "sendMessage"
-            p["text"] = api_text
+            p["text"] = use_txt
         return mth, p
 
     try:
         session = _get_shared_bot_api_session()
         method, payload = _build_payload(norm_kb)
-        async with session.post(url + method, json=payload, timeout=aiohttp.ClientTimeout(total=2.5)) as resp:
+        async with session.post(url + method, json=payload, timeout=aiohttp.ClientTimeout(total=3.0)) as resp:
             data = await resp.json()
             if data.get("ok"):
+                if supports_btn_icons and any(b.get("icon_custom_emoji_id") for row in norm_kb for b in row):
+                    _bot_custom_emoji_supported[token_key] = True
                 logger.info(f"[CustomEmojiAPI] ✅ {method} succeeded via Bot API to {c_id}")
-                return True
+                return data.get("result") or True
 
             err_desc = str(data.get("description", ""))
             err_code = data.get("error_code")
@@ -3998,16 +4225,22 @@ async def send_or_edit_with_custom_icons(
                 logger.warning(f"[CustomEmojiAPI] Bot API 429 rate limit hit: retry after {retry_after}s")
                 return False
 
-            # If button icons failed (not premium / not authorized bot), remember and retry stripped
-            if ("BUTTON_CUSTOM_EMOJI" in err_desc or "custom emoji" in err_desc.lower()) and "message is not modified" not in err_desc.lower():
-                _bot_supports_button_icons[bot_token] = False
+            # If button icons failed (not premium / not authorized bot), retry without button icons via Bot API so text <tg-emoji> works!
+            if ("BUTTON_CUSTOM_EMOJI" in err_desc or "CUSTOM_EMOJI" in err_desc or "BUTTON_TYPE_INVALID" in err_desc or "DOCUMENT_INVALID" in err_desc) and "message is not modified" not in err_desc.lower():
+                _bot_custom_emoji_supported[token_key] = False
                 stripped_kb = _strip_api_keyboard_icons(norm_kb)
                 method_r, payload_r = _build_payload(stripped_kb)
-                async with session.post(url + method_r, json=payload_r, timeout=aiohttp.ClientTimeout(total=2.0)) as resp_r:
+                async with session.post(url + method_r, json=payload_r, timeout=aiohttp.ClientTimeout(total=3.0)) as resp_r:
                     data_r = await resp_r.json()
                     if data_r.get("ok") or "message is not modified" in str(data_r.get("description", "")).lower():
                         logger.info(f"[CustomEmojiAPI] ✅ {method_r} (retry stripped icons) succeeded via Bot API to {c_id}")
-                        return True
+                        return data_r.get("result") or True
+                    # Final fallback with plain_text (no <tg-emoji> tags) + stripped button icons
+                    method_r2, payload_r2 = _build_payload(stripped_kb, txt_override=plain_text)
+                    async with session.post(url + method_r2, json=payload_r2, timeout=aiohttp.ClientTimeout(total=3.0)) as resp_r2:
+                        data_r2 = await resp_r2.json()
+                        if data_r2.get("ok") or "message is not modified" in str(data_r2.get("description", "")).lower():
+                            return data_r2.get("result") or True
                     logger.info(f"[CustomEmojiAPI] Bot API retry {method_r} returned: {data_r}")
 
             logger.info(f"[CustomEmojiAPI] Bot API {method} returned: {data}")
@@ -4015,6 +4248,61 @@ async def send_or_edit_with_custom_icons(
         logger.info(f"[CustomEmojiAPI] Bot API {method if 'method' in locals() else 'call'} exception: {e}")
 
     return False
+
+
+async def _render_pass_menu(client, query, text: str, api_kb: list, pyrogram_kb: any):
+    """
+    Renders or edits a pass menu response with sub-second latency.
+    1. Detects if the current message contains media (photo, animation, video, document).
+       If media, deletes it and sends the text menu cleanly.
+       If text, edits in-place via Bot API HTTP (for colored buttons and custom emojis),
+       falling back to Pyrogram MTProto edit if needed.
+    """
+    msg = getattr(query, "message", None)
+    if not msg:
+        return
+
+    markup = pyrogram_kb if isinstance(pyrogram_kb, InlineKeyboardMarkup) else InlineKeyboardMarkup(pyrogram_kb)
+    is_media = bool(
+        getattr(msg, 'photo', None) or
+        getattr(msg, 'animation', None) or
+        getattr(msg, 'video', None) or
+        getattr(msg, 'document', None)
+    )
+
+    if is_media:
+        try:
+            await msg.delete()
+        except Exception:
+            pass
+        sent_ok = await send_or_edit_with_custom_icons(
+            client=client,
+            chat_id=msg.chat.id,
+            text=text,
+            inline_keyboard=api_kb
+        )
+        if not sent_ok:
+            try:
+                await client.send_message(
+                    chat_id=msg.chat.id,
+                    text=text,
+                    reply_markup=markup
+                )
+            except Exception as e:
+                logger.warning(f"[_render_pass_menu] fallback send_message error: {e}")
+    else:
+        sent_ok = await send_or_edit_with_custom_icons(
+            client=client,
+            chat_id=msg.chat.id,
+            text=text,
+            inline_keyboard=api_kb,
+            message_id=msg.id
+        )
+        if not sent_ok:
+            try:
+                await msg.edit_text(text, reply_markup=markup)
+            except Exception as e:
+                logger.debug(f"[_render_pass_menu] fallback edit_text error: {e}")
 
 
 @Client.on_callback_query(filters.regex(r'^pass#'))
@@ -4029,12 +4317,26 @@ async def _process_pass_callback(client, query):
         await query.answer("⛔ You are banned from using this bot.", show_alert=True)
         return
 
+    # Immediately acknowledge button click for sub-second UI response unless callback handles custom alert
+    if not (
+        data == "pass#manual_ss_hint"
+        or data.startswith("pass#setlang_")
+        or data.startswith("pass#upirecheck_")
+        or data.startswith("pass#upistatus_")
+        or data.startswith("pass#oxaverify_")
+        or data.startswith("pass#verify_")
+    ):
+        try:
+            await query.answer()
+        except Exception:
+            pass
+
     # Clear pending UTR session if user navigates to any other menu/back
     if not data.startswith("pass#upibuy_") and not data.startswith("pass#upirecheck_") and data != "pass#manual_ss_hint":
         _pending_utr_users.pop(user_id, None)
 
     if data == "pass#manual_ss_hint":
-        user_lang = await db.get_language(user_id)
+        user_lang = await get_cached_user_lang(user_id)
         if user_lang == 'hi':
             hint_txt = "📸 कृपया अपने पेमेंट ऐप से सफल भुगतान का स्क्रीनशॉट इसी चैट में फोटो के रूप में भेजें (5 मिनट के भीतर)!"
         elif user_lang == 'hinglish':
@@ -4064,6 +4366,7 @@ async def _process_pass_callback(client, query):
             new_lang = "en"
             alert_msg = "✅ Language switched to English!"
         await db.set_language(user_id, new_lang)
+        _user_lang_cache[user_id] = (new_lang, time.time())
         try:
             await query.answer(alert_msg, show_alert=True)
         except Exception:
@@ -4071,7 +4374,7 @@ async def _process_pass_callback(client, query):
         data = "pass#unlock_menu"
 
     if data == "pass#lang_menu":
-        user_lang = await db.get_language(user_id)
+        user_lang = await get_cached_user_lang(user_id)
         is_hi = bool(user_lang == 'hi')
         is_hinglish = bool(user_lang == 'hinglish')
         is_en = bool(user_lang not in ('hi', 'hinglish'))
@@ -4087,38 +4390,18 @@ async def _process_pass_callback(client, query):
             [InlineKeyboardButton("🇮🇳 हिन्दी (Hindi)" + ("  ✅" if is_hi else ""), callback_data="pass#setlang_hi")],
             [InlineKeyboardButton("🇬🇧 English" + ("  ✅" if is_en else ""), callback_data="pass#setlang_en")],
             [InlineKeyboardButton("🌐 Hinglish ( Mix )" + ("  ✅" if is_hinglish else ""), callback_data="pass#setlang_hinglish")],
-            [InlineKeyboardButton("« Back / वापस", callback_data="pass#unlock_menu")]
+            [InlineKeyboardButton("←︎ Back / वापस", callback_data="pass#unlock_menu", style="danger")]
         ]
         lang_api_kb = [
             [{"text": "हिन्दी (Hindi)" + ("  ✅" if is_hi else ""), "callback_data": "pass#setlang_hi", "icon_custom_emoji_id": "5291933173674957761"}],
             [{"text": "English" + ("  ✅" if is_en else ""), "callback_data": "pass#setlang_en", "icon_custom_emoji_id": "5293993521026453119"}],
             [{"text": "Hinglish ( Mix )" + ("  ✅" if is_hinglish else ""), "callback_data": "pass#setlang_hinglish", "icon_custom_emoji_id": "6106890681081403663"}],
-            [{"text": "Back / वापस", "callback_data": "pass#unlock_menu", "icon_custom_emoji_id": "5879857507198833579"}]
+            [{"text": "←︎ Back / वापस", "callback_data": "pass#unlock_menu", "style": "danger"}]
         ]
-        if getattr(query.message, "photo", None):
-            try: await query.message.delete()
-            except Exception: pass
-            sent_ok = await send_or_edit_with_custom_icons(
-                client=client,
-                chat_id=query.message.chat.id,
-                text=lang_text,
-                inline_keyboard=lang_api_kb
-            )
-            if not sent_ok:
-                await client.send_message(chat_id=query.message.chat.id, text=lang_text, reply_markup=InlineKeyboardMarkup(lang_buttons))
-        else:
-            sent_ok = await send_or_edit_with_custom_icons(
-                client=client,
-                chat_id=query.message.chat.id,
-                text=lang_text,
-                inline_keyboard=lang_api_kb,
-                message_id=query.message.id
-            )
-            if not sent_ok:
-                await query.message.edit_text(lang_text, reply_markup=InlineKeyboardMarkup(lang_buttons))
+        await _render_pass_menu(client, query, lang_text, lang_api_kb, lang_buttons)
 
     elif data == "pass#guide_menu":
-        user_lang = await db.get_language(user_id)
+        user_lang = await get_cached_user_lang(user_id)
         is_hi = bool(user_lang == 'hi')
         is_hinglish = bool(user_lang == 'hinglish')
         pass_support_link = "https://t.me/AryaHelpTG"
@@ -4150,7 +4433,7 @@ async def _process_pass_callback(client, query):
                 '• यदि आपको कोई समस्या आ रही है या पेमेंट वेरिफाई नहीं हुआ, तो नीचे दिए गए <b>सहायता</b> बटन पर टैप करके सपोर्ट टीम से संपर्क करें!'
             )
             lbl_support = "सहायता"
-            lbl_back = "वापस"
+            lbl_back = "←︎ वापस"
         elif is_hinglish:
             guide_text = (
                 '<emoji id="6019130940012370273">📖</emoji> <b>Arya Subscription Guide & Support</b> <emoji id="6041919344995209164">❤️</emoji>\n'
@@ -4178,7 +4461,7 @@ async def _process_pass_callback(client, query):
                 '• Agar payment me issue ho ya koi query ho, niche <b>Support</b> button par tap karein!'
             )
             lbl_support = "Support"
-            lbl_back = "Back"
+            lbl_back = "←︎ Back"
         else:
             guide_text = (
                 '<emoji id="6019130940012370273">📖</emoji> <b>Arya Subscription Guide & Support</b> <emoji id="6041919344995209164">❤️</emoji>\n'
@@ -4206,47 +4489,26 @@ async def _process_pass_callback(client, query):
                 '• If your payment is delayed or you need any help, tap the <b>Support</b> button below to message our support desk!'
             )
             lbl_support = "Support"
-            lbl_back = "Back"
+            lbl_back = "←︎ Back"
 
         guide_buttons = [
-            [InlineKeyboardButton(f"🔒 {lbl_support}", url=pass_support_link)],
-            [InlineKeyboardButton(f"« {lbl_back}", callback_data="pass#unlock_menu")]
+            [InlineKeyboardButton(f"🔒 {lbl_support}", url=pass_support_link, style="danger")],
+            [InlineKeyboardButton(lbl_back, callback_data="pass#unlock_menu", style="danger")]
         ]
         guide_api_kb = [
-            [{"text": lbl_support, "url": pass_support_link, "icon_custom_emoji_id": "6030833407339008632"}],
-            [{"text": lbl_back, "callback_data": "pass#unlock_menu", "icon_custom_emoji_id": "5879857507198833579"}]
+            [{"text": lbl_support, "url": pass_support_link, "icon_custom_emoji_id": "6030833407339008632", "style": "danger"}],
+            [{"text": lbl_back, "callback_data": "pass#unlock_menu", "style": "danger"}]
         ]
-
-        if getattr(query.message, "photo", None):
-            try: await query.message.delete()
-            except Exception: pass
-            sent_ok = await send_or_edit_with_custom_icons(
-                client=client,
-                chat_id=query.message.chat.id,
-                text=guide_text,
-                inline_keyboard=guide_api_kb
-            )
-            if not sent_ok:
-                await client.send_message(chat_id=query.message.chat.id, text=guide_text, reply_markup=InlineKeyboardMarkup(guide_buttons))
-        else:
-            sent_ok = await send_or_edit_with_custom_icons(
-                client=client,
-                chat_id=query.message.chat.id,
-                text=guide_text,
-                inline_keyboard=guide_api_kb,
-                message_id=query.message.id
-            )
-            if not sent_ok:
-                await query.message.edit_text(guide_text, reply_markup=InlineKeyboardMarkup(guide_buttons))
+        await _render_pass_menu(client, query, guide_text, guide_api_kb, guide_buttons)
 
     elif data == "pass#unlock_menu":
-        rl_cfg = await db.get_delivery_rate_limit_config()
+        rl_cfg = await get_cached_rl_config()
         prices = rl_cfg.get('prices', {'1d': 15, '3d': 30, '7d': 55, '1mo': 250, '6mo': 1199})
         uiver = rl_cfg.get('pass_ui_version', 'v1')
         hidden_plans = rl_cfg.get('hidden_plans', [])
         if not isinstance(hidden_plans, list):
             hidden_plans = []
-        user_lang = await db.get_language(user_id)
+        user_lang = await get_cached_user_lang(user_id)
         is_hi = bool(user_lang == 'hi')
         is_hinglish = bool(user_lang == 'hinglish')
 
@@ -4348,25 +4610,25 @@ async def _process_pass_callback(client, query):
                 lbl_prem = "Arya Premium & Storyfi"
 
             methods_buttons = [
-                [InlineKeyboardButton(lbl_b, callback_data="pass#tier_basic")],
-                [InlineKeyboardButton(lbl_p, callback_data="pass#tier_pro")],
-                [InlineKeyboardButton(lbl_prem, callback_data="pass#tier_premium")],
-                [InlineKeyboardButton(lbl_txns, callback_data="pass#my_transactions")],
+                [InlineKeyboardButton(lbl_b, callback_data="pass#tier_basic", style="success")],
+                [InlineKeyboardButton(lbl_p, callback_data="pass#tier_pro", style="success")],
+                [InlineKeyboardButton(lbl_prem, callback_data="pass#tier_premium", style="success")],
+                [InlineKeyboardButton(lbl_txns, callback_data="pass#my_transactions", style="primary")],
                 [
-                    InlineKeyboardButton(lbl_help, callback_data="pass#guide_menu"),
-                    InlineKeyboardButton(" ", callback_data="pass#lang_menu"),
-                    InlineKeyboardButton(lbl_close, callback_data="pass#close")
+                    InlineKeyboardButton(lbl_help, callback_data="pass#guide_menu", style="danger"),
+                    InlineKeyboardButton(" ", callback_data="pass#lang_menu", style="danger"),
+                    InlineKeyboardButton(lbl_close, callback_data="pass#close", style="danger")
                 ]
             ]
             methods_api_kb = [
-                [{"text": lbl_b, "callback_data": "pass#tier_basic", "icon_custom_emoji_id": "5890925363067886150"}],
-                [{"text": lbl_p, "callback_data": "pass#tier_pro", "icon_custom_emoji_id": "5805553606635559688"}],
-                [{"text": lbl_prem, "callback_data": "pass#tier_premium", "icon_custom_emoji_id": "6156730271858169904"}],
-                [{"text": lbl_txns, "callback_data": "pass#my_transactions", "icon_custom_emoji_id": "6035297458907519073"}],
+                [{"text": lbl_b, "callback_data": "pass#tier_basic", "icon_custom_emoji_id": "5890925363067886150", "style": "success"}],
+                [{"text": lbl_p, "callback_data": "pass#tier_pro", "icon_custom_emoji_id": "5805553606635559688", "style": "success"}],
+                [{"text": lbl_prem, "callback_data": "pass#tier_premium", "icon_custom_emoji_id": "6156730271858169904", "style": "success"}],
+                [{"text": lbl_txns, "callback_data": "pass#my_transactions", "icon_custom_emoji_id": "6035297458907519073", "style": "primary"}],
                 [
-                    {"text": lbl_help, "callback_data": "pass#guide_menu", "icon_custom_emoji_id": "6019130940012370273"},
-                    {"text": " ", "callback_data": "pass#lang_menu", "icon_custom_emoji_id": "6030768072296502910"},
-                    {"text": lbl_close, "callback_data": "pass#close", "icon_custom_emoji_id": "5807651380332076999"}
+                    {"text": lbl_help, "callback_data": "pass#guide_menu", "icon_custom_emoji_id": "6019130940012370273", "style": "danger"},
+                    {"text": " ", "callback_data": "pass#lang_menu", "icon_custom_emoji_id": "6030768072296502910", "style": "danger"},
+                    {"text": lbl_close, "callback_data": "pass#close", "icon_custom_emoji_id": "5807651380332076999", "style": "danger"}
                 ]
             ]
 
@@ -4397,19 +4659,19 @@ async def _process_pass_callback(client, query):
                 plan_api_kb.append([{"text": label, "callback_data": cb, "icon_custom_emoji_id": emoji_id}])
 
             methods_buttons = list(plan_buttons)
-            methods_buttons.append([InlineKeyboardButton(f"📜 {lbl_txns}", callback_data="pass#my_transactions")])
+            methods_buttons.append([InlineKeyboardButton(f"📜 {lbl_txns}", callback_data="pass#my_transactions", style="primary")])
             methods_buttons.append([
-                InlineKeyboardButton(f"📖 {lbl_help}", callback_data="pass#guide_menu"),
-                InlineKeyboardButton(" ", callback_data="pass#lang_menu"),
-                InlineKeyboardButton(lbl_close, callback_data="pass#close")
+                InlineKeyboardButton(f"📖 {lbl_help}", callback_data="pass#guide_menu", style="danger"),
+                InlineKeyboardButton(" ", callback_data="pass#lang_menu", style="danger"),
+                InlineKeyboardButton(lbl_close, callback_data="pass#close", style="danger")
             ])
 
             methods_api_kb = list(plan_api_kb)
-            methods_api_kb.append([{"text": lbl_txns, "callback_data": "pass#my_transactions", "icon_custom_emoji_id": "6035297458907519073"}])
+            methods_api_kb.append([{"text": lbl_txns, "callback_data": "pass#my_transactions", "icon_custom_emoji_id": "6035297458907519073", "style": "primary"}])
             methods_api_kb.append([
-                {"text": lbl_help, "callback_data": "pass#guide_menu", "icon_custom_emoji_id": "6019130940012370273"},
-                {"text": " ", "callback_data": "pass#lang_menu", "icon_custom_emoji_id": "6030768072296502910"},
-                {"text": lbl_close, "callback_data": "pass#close", "icon_custom_emoji_id": "5807651380332076999"}
+                {"text": lbl_help, "callback_data": "pass#guide_menu", "icon_custom_emoji_id": "6019130940012370273", "style": "danger"},
+                {"text": " ", "callback_data": "pass#lang_menu", "icon_custom_emoji_id": "6030768072296502910", "style": "danger"},
+                {"text": lbl_close, "callback_data": "pass#close", "icon_custom_emoji_id": "5807651380332076999", "style": "danger"}
             ])
 
         else:
@@ -4467,65 +4729,43 @@ async def _process_pass_callback(client, query):
             methods_api_kb = []
             if upi_enabled:
                 upi_lbl = "UPI ( QR ) द्वारा भुगतान करें" if is_hi else "Pay Via UPI ( QR )"
-                methods_buttons.append([InlineKeyboardButton(f"💳 {upi_lbl}", callback_data="pass#method_upi")])
-                methods_api_kb.append([{"text": upi_lbl, "callback_data": "pass#method_upi", "icon_custom_emoji_id": "5766975922620076409"}])
+                methods_buttons.append([InlineKeyboardButton(f"💳 {upi_lbl}", callback_data="pass#method_upi", style="success")])
+                methods_api_kb.append([{"text": upi_lbl, "callback_data": "pass#method_upi", "icon_custom_emoji_id": "5766975922620076409", "style": "success"}])
 
             cf_lbl = "Pay Via Cards , NetBanking ( Cashfree )"
-            methods_buttons.append([InlineKeyboardButton(f"💳 {cf_lbl}", callback_data="pass#method_cashfree")])
-            methods_api_kb.append([{"text": cf_lbl, "callback_data": "pass#method_cashfree", "icon_custom_emoji_id": "6107442434055086407"}])
+            methods_buttons.append([InlineKeyboardButton(f"💳 {cf_lbl}", callback_data="pass#method_cashfree", style="success")])
+            methods_api_kb.append([{"text": cf_lbl, "callback_data": "pass#method_cashfree", "icon_custom_emoji_id": "6107442434055086407", "style": "success"}])
 
             if oxapay_enabled:
                 crypto_lbl = "Crypto द्वारा भुगतान करें" if is_hi else "Pay Via Crypto (Oxapay)"
-                methods_buttons.append([InlineKeyboardButton(f"🌐 {crypto_lbl}", callback_data="pass#method_crypto")])
-                methods_api_kb.append([{"text": crypto_lbl, "callback_data": "pass#method_crypto", "icon_custom_emoji_id": "5283232570660634549"}])
+                methods_buttons.append([InlineKeyboardButton(f"🌐 {crypto_lbl}", callback_data="pass#method_crypto", style="success")])
+                methods_api_kb.append([{"text": crypto_lbl, "callback_data": "pass#method_crypto", "icon_custom_emoji_id": "5283232570660634549", "style": "success"}])
 
-            methods_buttons.append([InlineKeyboardButton(f"📜 {lbl_txns}", callback_data="pass#my_transactions")])
+            methods_buttons.append([InlineKeyboardButton(f"📜 {lbl_txns}", callback_data="pass#my_transactions", style="primary")])
             methods_buttons.append([
-                InlineKeyboardButton(f"📖 {lbl_help}", callback_data="pass#guide_menu"),
-                InlineKeyboardButton(" ", callback_data="pass#lang_menu"),
-                InlineKeyboardButton(lbl_close, callback_data="pass#close")
+                InlineKeyboardButton(f"📖 {lbl_help}", callback_data="pass#guide_menu", style="danger"),
+                InlineKeyboardButton(" ", callback_data="pass#lang_menu", style="danger"),
+                InlineKeyboardButton(lbl_close, callback_data="pass#close", style="danger")
             ])
 
-            methods_api_kb.append([{"text": lbl_txns, "callback_data": "pass#my_transactions", "icon_custom_emoji_id": "6035297458907519073"}])
+            methods_api_kb.append([{"text": lbl_txns, "callback_data": "pass#my_transactions", "icon_custom_emoji_id": "6035297458907519073", "style": "primary"}])
             methods_api_kb.append([
-                {"text": lbl_help, "callback_data": "pass#guide_menu", "icon_custom_emoji_id": "6019130940012370273"},
-                {"text": " ", "callback_data": "pass#lang_menu", "icon_custom_emoji_id": "6030768072296502910"},
-                {"text": lbl_close, "callback_data": "pass#close", "icon_custom_emoji_id": "5807651380332076999"}
+                {"text": lbl_help, "callback_data": "pass#guide_menu", "icon_custom_emoji_id": "6019130940012370273", "style": "danger"},
+                {"text": " ", "callback_data": "pass#lang_menu", "icon_custom_emoji_id": "6030768072296502910", "style": "danger"},
+                {"text": lbl_close, "callback_data": "pass#close", "icon_custom_emoji_id": "5807651380332076999", "style": "danger"}
             ])
 
-        methods_kb = InlineKeyboardMarkup(methods_buttons)
-
-        if getattr(query.message, "photo", None):
-            try: await query.message.delete()
-            except Exception: pass
-            sent_ok = await send_or_edit_with_custom_icons(
-                client=client,
-                chat_id=query.message.chat.id,
-                text=methods_text,
-                inline_keyboard=methods_api_kb
-            )
-            if not sent_ok:
-                await client.send_message(chat_id=query.message.chat.id, text=methods_text, reply_markup=methods_kb)
-        else:
-            sent_ok = await send_or_edit_with_custom_icons(
-                client=client,
-                chat_id=query.message.chat.id,
-                text=methods_text,
-                inline_keyboard=methods_api_kb,
-                message_id=query.message.id
-            )
-            if not sent_ok:
-                await query.message.edit_text(methods_text, reply_markup=methods_kb)
+        await _render_pass_menu(client, query, methods_text, methods_api_kb, methods_buttons)
 
     elif data.startswith("pass#tier_"):
         tier = data.replace("pass#tier_", "").strip().lower()
         if tier not in ('basic', 'pro', 'premium'):
             tier = 'basic'
 
-        user_lang = await db.get_language(user_id)
+        user_lang = await get_cached_user_lang(user_id)
         is_hi = bool(user_lang == 'hi')
         is_hinglish = bool(user_lang == 'hinglish')
-        back_lbl = "वापस" if is_hi else ("Back" if not is_hinglish else "Back")
+        back_lbl = "←︎ वापस" if is_hi else "←︎ Back"
 
         if tier == 'premium':
             storyfi_url = "https://t.me/StoryfiBot"
@@ -4578,17 +4818,17 @@ async def _process_pass_callback(client, query):
                 )
 
             plan_buttons = [
-                [InlineKeyboardButton("🤖 Storyfi Bot", url=storyfi_url)],
-                [InlineKeyboardButton("💎 Arya Premium", url=arya_prem_url)],
-                [InlineKeyboardButton(back_lbl, callback_data="pass#unlock_menu")]
+                [InlineKeyboardButton("🤖 Storyfi Bot", url=storyfi_url, style="primary")],
+                [InlineKeyboardButton("💎 Arya Premium", url=arya_prem_url, style="primary")],
+                [InlineKeyboardButton(back_lbl, callback_data="pass#unlock_menu", style="danger")]
             ]
             plan_api_kb = [
-                [{"text": "Storyfi Bot", "url": storyfi_url, "icon_custom_emoji_id": "6032594876506312598"}],
-                [{"text": "Arya Premium", "url": arya_prem_url, "icon_custom_emoji_id": "6007983438294949171"}],
-                [{"text": back_lbl, "callback_data": "pass#unlock_menu", "icon_custom_emoji_id": "5807651380332076999"}]
+                [{"text": "Storyfi Bot", "url": storyfi_url, "icon_custom_emoji_id": "6032594876506312598", "style": "primary"}],
+                [{"text": "Arya Premium", "url": arya_prem_url, "icon_custom_emoji_id": "6007983438294949171", "style": "primary"}],
+                [{"text": back_lbl, "callback_data": "pass#unlock_menu", "style": "danger"}]
             ]
         else:
-            rl_cfg = await db.get_delivery_rate_limit_config()
+            rl_cfg = await get_cached_rl_config()
             v2_gw = rl_cfg.get('v2_gateway', 'cashfree')
             hidden_plans = rl_cfg.get('hidden_plans', [])
             if not isinstance(hidden_plans, list):
@@ -4614,8 +4854,8 @@ async def _process_pass_callback(client, query):
                 plan_buttons.append([InlineKeyboardButton(label, callback_data=cb)])
                 plan_api_kb.append([{"text": label, "callback_data": cb, "icon_custom_emoji_id": emoji_id}])
 
-            plan_buttons.append([InlineKeyboardButton(back_lbl, callback_data="pass#unlock_menu")])
-            plan_api_kb.append([{"text": back_lbl, "callback_data": "pass#unlock_menu", "icon_custom_emoji_id": "5807651380332076999"}])
+            plan_buttons.append([InlineKeyboardButton(back_lbl, callback_data="pass#unlock_menu", style="danger")])
+            plan_api_kb.append([{"text": back_lbl, "callback_data": "pass#unlock_menu", "style": "danger"}])
 
             if tier == 'pro':
                 if is_hi:
@@ -4677,35 +4917,15 @@ async def _process_pass_callback(client, query):
                         f'<emoji id="6019224342666157570">💳</emoji> <b>Select your desired Basic plan below:</b>'
                     )
 
-        if getattr(query.message, "photo", None):
-            try: await query.message.delete()
-            except Exception: pass
-            sent_ok = await send_or_edit_with_custom_icons(
-                client=client,
-                chat_id=query.message.chat.id,
-                text=tier_text,
-                inline_keyboard=plan_api_kb
-            )
-            if not sent_ok:
-                await client.send_message(chat_id=query.message.chat.id, text=tier_text, reply_markup=InlineKeyboardMarkup(plan_buttons))
-        else:
-            sent_ok = await send_or_edit_with_custom_icons(
-                client=client,
-                chat_id=query.message.chat.id,
-                text=tier_text,
-                inline_keyboard=plan_api_kb,
-                message_id=query.message.id
-            )
-            if not sent_ok:
-                await query.message.edit_text(tier_text, reply_markup=InlineKeyboardMarkup(plan_buttons))
+        await _render_pass_menu(client, query, tier_text, plan_api_kb, plan_buttons)
 
     elif data == "pass#method_cashfree":
-        rl_cfg = await db.get_delivery_rate_limit_config()
+        rl_cfg = await get_cached_rl_config()
         prices = rl_cfg.get('prices', {'1d': 15, '3d': 30, '7d': 55, '1mo': 250, '6mo': 1199})
         hidden_plans = rl_cfg.get('hidden_plans', [])
         if not isinstance(hidden_plans, list):
             hidden_plans = []
-        user_lang = await db.get_language(user_id)
+        user_lang = await get_cached_user_lang(user_id)
         is_hi = bool(user_lang == 'hi')
         is_hinglish = bool(user_lang == 'hinglish')
         
@@ -4721,9 +4941,9 @@ async def _process_pass_callback(client, query):
             plan_buttons.append([InlineKeyboardButton(label, callback_data=cb)])
             plan_api_kb.append([{"text": label, "callback_data": cb, "icon_custom_emoji_id": emoji_id}])
 
-        back_lbl = "वापस" if is_hi else "Back"
-        plan_buttons.append([InlineKeyboardButton(back_lbl, callback_data="pass#unlock_menu")])
-        plan_api_kb.append([{"text": back_lbl, "callback_data": "pass#unlock_menu"}])
+        back_lbl = "←︎ वापस" if is_hi else "←︎ Back"
+        plan_buttons.append([InlineKeyboardButton(back_lbl, callback_data="pass#unlock_menu", style="danger")])
+        plan_api_kb.append([{"text": back_lbl, "callback_data": "pass#unlock_menu", "style": "danger"}])
 
         if is_hi:
             text = (
@@ -4746,37 +4966,17 @@ async def _process_pass_callback(client, query):
                 "Instant payment with Cards, NetBanking, UPI.\n\n"
                 "Select your desired Pass plan:"
             )
-        if getattr(query.message, "photo", None):
-            try: await query.message.delete()
-            except Exception: pass
-            sent_ok = await send_or_edit_with_custom_icons(
-                client=client,
-                chat_id=query.message.chat.id,
-                text=text,
-                inline_keyboard=plan_api_kb
-            )
-            if not sent_ok:
-                await client.send_message(chat_id=query.message.chat.id, text=text, reply_markup=InlineKeyboardMarkup(plan_buttons))
-        else:
-            sent_ok = await send_or_edit_with_custom_icons(
-                client=client,
-                chat_id=query.message.chat.id,
-                text=text,
-                inline_keyboard=plan_api_kb,
-                message_id=query.message.id
-            )
-            if not sent_ok:
-                await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(plan_buttons))
+        await _render_pass_menu(client, query, text, plan_api_kb, plan_buttons)
 
     elif data == "pass#method_upi":
-        rl_cfg = await db.get_delivery_rate_limit_config()
+        rl_cfg = await get_cached_rl_config()
         if not rl_cfg.get('upi_enabled', True):
             return await query.answer("⚠️ Pay Via UPI is currently disabled by administrator.", show_alert=True)
         prices = rl_cfg.get('prices', {'1d': 15, '3d': 30, '7d': 55, '1mo': 250, '6mo': 1199})
         hidden_plans = rl_cfg.get('hidden_plans', [])
         if not isinstance(hidden_plans, list):
             hidden_plans = []
-        user_lang = await db.get_language(user_id)
+        user_lang = await get_cached_user_lang(user_id)
         is_hi = bool(user_lang == 'hi')
         is_hinglish = bool(user_lang == 'hinglish')
         
@@ -4792,9 +4992,9 @@ async def _process_pass_callback(client, query):
             plan_buttons.append([InlineKeyboardButton(label, callback_data=cb)])
             plan_api_kb.append([{"text": label, "callback_data": cb, "icon_custom_emoji_id": emoji_id}])
 
-        back_lbl = "वापस" if is_hi else "Back"
-        plan_buttons.append([InlineKeyboardButton(back_lbl, callback_data="pass#unlock_menu")])
-        plan_api_kb.append([{"text": back_lbl, "callback_data": "pass#unlock_menu"}])
+        back_lbl = "←︎ वापस" if is_hi else "←︎ Back"
+        plan_buttons.append([InlineKeyboardButton(back_lbl, callback_data="pass#unlock_menu", style="danger")])
+        plan_api_kb.append([{"text": back_lbl, "callback_data": "pass#unlock_menu", "style": "danger"}])
 
         if is_hi:
             text = (
@@ -4817,30 +5017,10 @@ async def _process_pass_callback(client, query):
                 "Instant payment with Paytm, PhonePe, GPay, BHIM, or any UPI app.\n\n"
                 '<emoji id="6019224342666157570">💳</emoji> <b>Select your desired Pass plan below:</b>'
             )
-        if getattr(query.message, "photo", None):
-            try: await query.message.delete()
-            except Exception: pass
-            sent_ok = await send_or_edit_with_custom_icons(
-                client=client,
-                chat_id=query.message.chat.id,
-                text=text,
-                inline_keyboard=plan_api_kb
-            )
-            if not sent_ok:
-                await client.send_message(chat_id=query.message.chat.id, text=text, reply_markup=InlineKeyboardMarkup(plan_buttons))
-        else:
-            sent_ok = await send_or_edit_with_custom_icons(
-                client=client,
-                chat_id=query.message.chat.id,
-                text=text,
-                inline_keyboard=plan_api_kb,
-                message_id=query.message.id
-            )
-            if not sent_ok:
-                await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(plan_buttons))
+        await _render_pass_menu(client, query, text, plan_api_kb, plan_buttons)
 
     elif data == "pass#method_crypto":
-        rl_cfg = await db.get_delivery_rate_limit_config()
+        rl_cfg = await get_cached_rl_config()
         if not rl_cfg.get('oxapay_enabled', True):
             return await query.answer("⚠️ Crypto payments are currently disabled by administrator.", show_alert=True)
 
@@ -4848,7 +5028,7 @@ async def _process_pass_callback(client, query):
         hidden_plans = rl_cfg.get('hidden_plans', [])
         if not isinstance(hidden_plans, list):
             hidden_plans = []
-        user_lang = await db.get_language(user_id)
+        user_lang = await get_cached_user_lang(user_id)
         is_hi = bool(user_lang == 'hi')
         is_hinglish = bool(user_lang == 'hinglish')
         
@@ -4867,9 +5047,9 @@ async def _process_pass_callback(client, query):
                 plan_buttons.append([InlineKeyboardButton(label, callback_data=cb)])
                 plan_api_kb.append([{"text": label, "callback_data": cb, "icon_custom_emoji_id": emoji_id}])
 
-        back_lbl = "वापस" if is_hi else "Back"
-        plan_buttons.append([InlineKeyboardButton(back_lbl, callback_data="pass#unlock_menu")])
-        plan_api_kb.append([{"text": back_lbl, "callback_data": "pass#unlock_menu"}])
+        back_lbl = "←︎ वापस" if is_hi else "←︎ Back"
+        plan_buttons.append([InlineKeyboardButton(back_lbl, callback_data="pass#unlock_menu", style="danger")])
+        plan_api_kb.append([{"text": back_lbl, "callback_data": "pass#unlock_menu", "style": "danger"}])
 
         if len(plan_buttons) <= 1:
             if is_hi:
@@ -4924,30 +5104,10 @@ async def _process_pass_callback(client, query):
                     '<emoji id="6026080811277621020">💡</emoji> <b>Note:</b> OxaPay has a minimum order limit of $0.50 USD (~₹46). Only eligible plans are displayed below:\n\n'
                     '<emoji id="6019224342666157570">💳</emoji> <b>Select your desired Pass plan below:</b>'
                 )
-        if getattr(query.message, "photo", None):
-            try: await query.message.delete()
-            except Exception: pass
-            sent_ok = await send_or_edit_with_custom_icons(
-                client=client,
-                chat_id=query.message.chat.id,
-                text=text,
-                inline_keyboard=plan_api_kb
-            )
-            if not sent_ok:
-                await client.send_message(chat_id=query.message.chat.id, text=text, reply_markup=InlineKeyboardMarkup(plan_buttons))
-        else:
-            sent_ok = await send_or_edit_with_custom_icons(
-                client=client,
-                chat_id=query.message.chat.id,
-                text=text,
-                inline_keyboard=plan_api_kb,
-                message_id=query.message.id
-            )
-            if not sent_ok:
-                await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(plan_buttons))
+        await _render_pass_menu(client, query, text, plan_api_kb, plan_buttons)
 
     elif data == "pass#my_transactions" or data.startswith("pass#my_transactions_"):
-        user_lang = await db.get_language(user_id)
+        user_lang = await get_cached_user_lang(user_id)
         is_hi = bool(user_lang == 'hi')
         is_hinglish = bool(user_lang == 'hinglish')
 
@@ -5099,7 +5259,7 @@ async def _process_pass_callback(client, query):
         else:
             txns_body = "आपके खाते पर कोई पिछला लेनदेन नहीं मिला।" if is_hi else ("Aapke account par koi previous transactions nahi mile." if is_hinglish else "No previous transactions found on your account.")
 
-        back_lbl = "वापस" if is_hi else "Back"
+        back_lbl = "←︎ वापस" if is_hi else "←︎ Back"
         if is_hi:
             text = (
                 '<emoji id="6035297458907519073">📜</emoji> <b>मेरे ट्रांसक्शन्स और पास स्थिति</b>\n'
@@ -5131,32 +5291,10 @@ async def _process_pass_callback(client, query):
                 f"{txns_body}"
             )
         kb_rows = list(nav_buttons)
-        kb_rows.append([InlineKeyboardButton(back_lbl, callback_data="pass#unlock_menu")])
+        kb_rows.append([InlineKeyboardButton(back_lbl, callback_data="pass#unlock_menu", style="danger")])
         api_kb_rows = list(api_nav_buttons)
-        api_kb_rows.append([{"text": back_lbl, "callback_data": "pass#unlock_menu", "icon_custom_emoji_id": "5879857507198833579"}])
-        kb = InlineKeyboardMarkup(kb_rows)
-        api_kb = api_kb_rows
-        if getattr(query.message, "photo", None):
-            try: await query.message.delete()
-            except Exception: pass
-            sent_ok = await send_or_edit_with_custom_icons(
-                client=client,
-                chat_id=query.message.chat.id,
-                text=text,
-                inline_keyboard=api_kb
-            )
-            if not sent_ok:
-                await client.send_message(chat_id=query.message.chat.id, text=text, reply_markup=kb)
-        else:
-            sent_ok = await send_or_edit_with_custom_icons(
-                client=client,
-                chat_id=query.message.chat.id,
-                text=text,
-                inline_keyboard=api_kb,
-                message_id=query.message.id
-            )
-            if not sent_ok:
-                await query.message.edit_text(text, reply_markup=kb)
+        api_kb_rows.append([{"text": back_lbl, "callback_data": "pass#unlock_menu", "style": "danger"}])
+        await _render_pass_menu(client, query, text, api_kb_rows, kb_rows)
 
     elif data.startswith("pass#upibuy_"):
         parts = data.split("_")
@@ -5215,14 +5353,14 @@ async def _process_pass_callback(client, query):
         order_num = await db.get_next_pass_order_number()
         order_id = f"PASS-{user_id}-{dur_tag}-{order_num}"
 
-        rl_cfg = await db.get_delivery_rate_limit_config()
+        rl_cfg = await get_cached_rl_config()
         from config import Config
         raw_upi = str(rl_cfg.get("upi_id") or getattr(Config, "UPI_ID", "") or os.environ.get("UPI_ID", "") or "").strip()
         payee_name = str(rl_cfg.get("upi_name") or "Arya Delivery Pass").strip()
 
         if not raw_upi:
             err_kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("← Back", callback_data="pass#method_upi")]
+                [InlineKeyboardButton("← Back", callback_data="pass#method_upi", style="danger")]
             ])
             return await query.message.edit_text(
                 "⚠️ <b>UPI Not Configured</b>\n\n"
@@ -5257,11 +5395,15 @@ async def _process_pass_callback(client, query):
             }
 
         # Save order document to MongoDB
+        b_id = getattr(getattr(client, "me", None), "id", None)
+        b_username = getattr(getattr(client, "me", None), "username", "")
         try:
             await db.pass_orders.insert_one({
                 'order_id': order_id,
                 'user_id': user_id,
                 'user_name': user_name,
+                'bot_id': str(b_id) if b_id else None,
+                'bot_username': b_username,
                 'plan': dur_key,
                 'duration': dur_key,
                 'amount': dyn_amount,
@@ -5282,7 +5424,7 @@ async def _process_pass_callback(client, query):
         tn_clean = urllib.parse.quote_plus(order_id)
         upi_payload = f"upi://pay?pa={raw_upi}&pn={pn_clean}&am={dyn_amount:.2f}&cu=INR&tn={tn_clean}"
 
-        user_lang = await db.get_language(user_id)
+        user_lang = await get_cached_user_lang(user_id)
         is_hi = bool(user_lang == 'hi')
         is_hinglish = bool(user_lang == 'hinglish')
         if uiver == 'v3':
@@ -5303,14 +5445,16 @@ async def _process_pass_callback(client, query):
                     f"• <b>भुगतान की राशि:</b> <code>₹{dyn_amount:.2f}</code>\n"
                     f"• <b>UPI ID:</b> <code>{raw_upi}</code> (कॉपी करने के लिए टैप करें)\n"
                     f"• <b>ऑर्डर ID:</b> <code>{order_id}</code>\n\n"
+                    '<blockquote expandable>'
                     '<emoji id="5807800879553715710">📲</emoji> <b>भुगतान निर्देश:</b>\n'
                     "1. ऊपर दिए गए QR कोड को स्कैन करें या सीधे UPI ID पर पेमेंट करें।\n"
                     f"2. भुगतान पूरा होने के बाद <b>5 मिनट के भीतर</b> पेमेंट का <b>स्क्रीनशॉट (Screenshot)</b> इसी चैट में फोटो के रूप में भेजें।\n"
-                    "3. स्क्रीनशॉट मिलते ही एडमिन द्वारा वेरीफाई करके आपका पास तुरंत एक्टिवेट कर दिया जाएगा!\n\n"
+                    "3. स्क्रीनशॉट मिलते ही एडमिन द्वारा वेरीफाई करके आपका पास तुरंत एक्टिवेट कर दिया जाएगा!"
+                    '</blockquote>\n\n'
                     '<emoji id="6034898821517940846">⏰</emoji> <b>स्क्रीनशॉट की प्रतीक्षा...</b> (5 मिनट के भीतर भेजें)'
                 )
                 btn_switch_cf = "Cashfree से भुगतान करें"
-                btn_back = "वापस"
+                btn_back = "←︎ वापस"
             elif is_hinglish:
                 plan_name = format_plan_name_friendly(dur_key, lang='en')
                 tier_badge = (f' (<emoji id="5805553606635559688">👑</emoji> Pro Tier)' if tier == 'pro' else f' (<emoji id="5890925363067886150">⚡</emoji> Basic Tier)') if uiver == 'v3' else ""
@@ -5321,14 +5465,16 @@ async def _process_pass_callback(client, query):
                     f"• <b>Amount to Pay:</b> <code>₹{dyn_amount:.2f}</code>\n"
                     f"• <b>UPI ID:</b> <code>{raw_upi}</code> (Tap to Copy)\n"
                     f"• <b>Order ID:</b> <code>{order_id}</code>\n\n"
+                    '<blockquote expandable>'
                     '<emoji id="5807800879553715710">📲</emoji> <b>Payment Instructions:</b>\n'
                     "1. Upar diye gaye QR code ko scan karein ya direct UPI ID par payment karein.\n"
                     f"2. Payment hone ke baad <b>5 minute ke andar</b> payment ka <b>Screenshot</b> isi chat me photo format me send karein.\n"
-                    "3. Admin dwara screenshot verify hote hi aapka Unlimited Pass turant activate ho jayega!\n\n"
+                    "3. Admin dwara screenshot verify hote hi aapka Unlimited Pass turant activate ho jayega!"
+                    '</blockquote>\n\n'
                     '<emoji id="6034898821517940846">⏰</emoji> <b>Waiting for Screenshot...</b> (5 minute ke andar send karein)'
                 )
                 btn_switch_cf = "Cashfree se Pay Karein"
-                btn_back = "Back"
+                btn_back = "←︎ Back"
             else:
                 plan_name = format_plan_name_friendly(dur_key, lang='en')
                 tier_badge = (f' (<emoji id="5805553606635559688">👑</emoji> Pro Tier)' if tier == 'pro' else f' (<emoji id="5890925363067886150">⚡</emoji> Basic Tier)') if uiver == 'v3' else ""
@@ -5339,22 +5485,24 @@ async def _process_pass_callback(client, query):
                     f"• <b>Exact Amount to Pay:</b> <code>₹{dyn_amount:.2f}</code>\n"
                     f"• <b>UPI ID:</b> <code>{raw_upi}</code> (Tap to Copy)\n"
                     f"• <b>Order ID:</b> <code>{order_id}</code>\n\n"
+                    '<blockquote expandable>'
                     '<emoji id="5807800879553715710">📲</emoji> <b>Payment Instructions:</b>\n'
                     "1. Scan the QR code above or pay directly to the UPI ID.\n"
                     f"2. After making payment, please send the <b>Payment Screenshot within 5 minutes</b> in this chat.\n"
-                    "3. Our admin team will verify your screenshot and activate your pass immediately!\n\n"
+                    "3. Our admin team will verify your screenshot and activate your pass immediately!"
+                    '</blockquote>\n\n'
                     '<emoji id="6034898821517940846">⏰</emoji> <b>Waiting for Screenshot...</b> (Submit within 5 minutes)'
                 )
                 btn_switch_cf = "Instead Pay with Cashfree"
-                btn_back = "Back"
+                btn_back = "←︎ Back"
 
             photo_kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton(f"⚡ {btn_switch_cf}", callback_data=f"pass#switch_cf_{order_id}")],
-                [InlineKeyboardButton(f"« {btn_back}", callback_data=back_cb)]
+                [InlineKeyboardButton(f"⚡ {btn_switch_cf}", callback_data=f"pass#switch_cf_{order_id}", style="primary")],
+                [InlineKeyboardButton(btn_back, callback_data=back_cb, style="danger")]
             ])
             photo_api_kb = [
-                [{"text": btn_switch_cf, "callback_data": f"pass#switch_cf_{order_id}", "icon_custom_emoji_id": "5283232570660634549"}],
-                [{"text": btn_back, "callback_data": back_cb, "icon_custom_emoji_id": "5879857507198833579"}]
+                [{"text": btn_switch_cf, "callback_data": f"pass#switch_cf_{order_id}", "icon_custom_emoji_id": "5283232570660634549", "style": "primary"}],
+                [{"text": btn_back, "callback_data": back_cb, "style": "danger"}]
             ]
         else:
             if is_hi:
@@ -5367,16 +5515,18 @@ async def _process_pass_callback(client, query):
                     f"• <b>भुगतान की सटीक राशि:</b> <code>₹{dyn_amount:.2f}</code>\n"
                     f"• <b>UPI ID:</b> <code>{raw_upi}</code> (कॉपी करने के लिए टैप करें)\n"
                     f"• <b>ऑर्डर ID:</b> <code>{order_id}</code>\n\n"
+                    '<blockquote expandable>'
                     '<emoji id="5807800879553715710">📲</emoji> <b>भुगतान निर्देश:</b>\n'
                     "1. ऊपर दिए गए QR कोड को स्कैन करें या सीधे UPI ID पर पेमेंट करें।\n"
                     f"2. बिल्कुल सटीक <b>₹{dyn_amount:.2f}</b> का भुगतान करें (पैसे कम या ज्यादा न करें)।\n"
-                    "3. <b>ऑटोमैटिक वेरिफिकेशन:</b> आपको UTR सबमिट करने की कोई आवश्यकता नहीं है! पेमेंट करने के 5-15 सेकंड में सिस्टम ऑटोमैटिकली पास एक्टिवेट कर देगा।\n\n"
+                    "3. <b>ऑटोमैटिक वेरिफिकेशन:</b> आपको UTR सबमिट करने की कोई आवश्यकता नहीं है! पेमेंट करने के 5-15 सेकंड में सिस्टम ऑटोमैटिकली पास एक्टिवेट कर देगा।"
+                    '</blockquote>\n\n'
                     '<emoji id="6034898821517940846">⏰</emoji> <b>भुगतान की प्रतीक्षा में...</b> (10 मिनट के लिए वैध)\n'
                     "जैसे ही आपका पेमेंट प्राप्त होगा, आपका अनलिमिटेड पास तुरंत सक्रिय हो जाएगा!"
                 )
                 btn_status = "पेमेंट स्टेटस चेक करें"
                 btn_switch_cf = "Cashfree से भुगतान करें"
-                btn_back = "वापस"
+                btn_back = "←︎ वापस"
             elif is_hinglish:
                 plan_name = format_plan_name_friendly(dur_key, lang='en')
                 tier_badge = (f' (<emoji id="5805553606635559688">👑</emoji> Pro Tier)' if tier == 'pro' else f' (<emoji id="5890925363067886150">⚡</emoji> Basic Tier)') if uiver == 'v3' else ""
@@ -5387,16 +5537,18 @@ async def _process_pass_callback(client, query):
                     f"• <b>Exact Amount to Pay:</b> <code>₹{dyn_amount:.2f}</code>\n"
                     f"• <b>UPI ID:</b> <code>{raw_upi}</code> (Tap to Copy)\n"
                     f"• <b>Order ID:</b> <code>{order_id}</code>\n\n"
+                    '<blockquote expandable>'
                     '<emoji id="5807800879553715710">📲</emoji> <b>Payment Instructions:</b>\n'
                     "1. Scan the QR code above or pay directly to the UPI ID.\n"
                     f"2. Pay EXACTLY <b>₹{dyn_amount:.2f}</b> (do not round off paise).\n"
-                    "3. <b>Zero Hassle:</b> UTR submit karne ki jarurat nahi hai! Payment ke 5-15 seconds me system automatically pass activate kar dega.\n\n"
+                    "3. <b>Zero Hassle:</b> UTR submit karne ki jarurat nahi hai! Payment ke 5-15 seconds me system automatically pass activate kar dega."
+                    '</blockquote>\n\n'
                     '<emoji id="6034898821517940846">⏰</emoji> <b>Waiting for Payment...</b> (Valid for 10 Minutes)\n'
                     "Payment detect hote hi aapka Unlimited Pass turant active ho jayega!"
                 )
                 btn_status = "Check Payment Status"
                 btn_switch_cf = "Cashfree se Pay Karein"
-                btn_back = "Back"
+                btn_back = "←︎ Back"
             else:
                 plan_name = format_plan_name_friendly(dur_key, lang='en')
                 tier_badge = (f' (<emoji id="5805553606635559688">👑</emoji> Pro Tier)' if tier == 'pro' else f' (<emoji id="5890925363067886150">⚡</emoji> Basic Tier)') if uiver == 'v3' else ""
@@ -5407,26 +5559,28 @@ async def _process_pass_callback(client, query):
                     f"• <b>Exact Amount to Pay:</b> <code>₹{dyn_amount:.2f}</code>\n"
                     f"• <b>UPI ID:</b> <code>{raw_upi}</code> (Tap to Copy)\n"
                     f"• <b>Order ID:</b> <code>{order_id}</code>\n\n"
+                    '<blockquote expandable>'
                     '<emoji id="5807800879553715710">📲</emoji> <b>Payment Instructions:</b>\n'
                     "1. Scan the QR code above or pay directly to the UPI ID.\n"
                     f"2. Pay EXACTLY <b>₹{dyn_amount:.2f}</b> (do not round off paise).\n"
-                    "3. <b>Zero Hassle:</b> You do NOT need to submit UTR! Our automated system verifies payment within 5-15 seconds.\n\n"
+                    "3. <b>Zero Hassle:</b> You do NOT need to submit UTR! Our automated system verifies payment within 5-15 seconds."
+                    '</blockquote>\n\n'
                     '<emoji id="6034898821517940846">⏰</emoji> <b>Waiting for Payment...</b> (Valid for 10 Minutes)\n'
                     "Your unlimited access pass will activate automatically as soon as payment is detected!"
                 )
                 btn_status = "Check Payment Status"
                 btn_switch_cf = "Instead Pay with Cashfree"
-                btn_back = "Back"
+                btn_back = "←︎ Back"
 
             photo_kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton(f"🔄 {btn_status}", callback_data=f"pass#upistatus_{order_id}_{dur_key}_{dyn_amount}")],
-                [InlineKeyboardButton(f"⚡ {btn_switch_cf}", callback_data=f"pass#switch_cf_{order_id}")],
-                [InlineKeyboardButton(f"« {btn_back}", callback_data=back_cb)]
+                [InlineKeyboardButton(f"🔄 {btn_status}", callback_data=f"pass#upistatus_{order_id}_{dur_key}_{dyn_amount}", style="success")],
+                [InlineKeyboardButton(f"⚡ {btn_switch_cf}", callback_data=f"pass#switch_cf_{order_id}", style="primary")],
+                [InlineKeyboardButton(btn_back, callback_data=back_cb, style="danger")]
             ])
             photo_api_kb = [
-                [{"text": btn_status, "callback_data": f"pass#upistatus_{order_id}_{dur_key}_{dyn_amount}", "icon_custom_emoji_id": "5807492110059838726"}],
-                [{"text": btn_switch_cf, "callback_data": f"pass#switch_cf_{order_id}", "icon_custom_emoji_id": "5283232570660634549"}],
-                [{"text": btn_back, "callback_data": back_cb, "icon_custom_emoji_id": "5879857507198833579"}]
+                [{"text": btn_status, "callback_data": f"pass#upistatus_{order_id}_{dur_key}_{dyn_amount}", "icon_custom_emoji_id": "5807492110059838726", "style": "success"}],
+                [{"text": btn_switch_cf, "callback_data": f"pass#switch_cf_{order_id}", "icon_custom_emoji_id": "5283232570660634549", "style": "primary"}],
+                [{"text": btn_back, "callback_data": back_cb, "style": "danger"}]
             ]
 
         # Generate QR buffer with dynamic amount and unified order ID
@@ -5585,12 +5739,12 @@ async def _process_pass_callback(client, query):
                 lbl_supp = "Support"
 
             success_kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton(f"📜 {lbl_txns}", callback_data="pass#my_transactions")],
-                [InlineKeyboardButton(f"🔒 {lbl_supp}", url="https://t.me/AryaHelpTG")]
+                [InlineKeyboardButton(f"📜 {lbl_txns}", callback_data="pass#my_transactions", style="primary")],
+                [InlineKeyboardButton(f"🔒 {lbl_supp}", url="https://t.me/AryaHelpTG", style="danger")]
             ])
             success_api_kb = [
-                [{"text": lbl_txns, "callback_data": "pass#my_transactions", "icon_custom_emoji_id": "6035297458907519073"}],
-                [{"text": lbl_supp, "url": "https://t.me/AryaHelpTG", "icon_custom_emoji_id": "6030833407339008632"}]
+                [{"text": lbl_txns, "callback_data": "pass#my_transactions", "icon_custom_emoji_id": "6035297458907519073", "style": "primary"}],
+                [{"text": lbl_supp, "url": "https://t.me/AryaHelpTG", "icon_custom_emoji_id": "6030833407339008632", "style": "danger"}]
             ]
             sent_ok = await send_or_edit_with_custom_icons(
                 client=client,
@@ -5650,7 +5804,7 @@ async def _process_pass_callback(client, query):
             f"<i>Our automated Gmail verification engine will verify the credit and activate your pass within seconds!</i>"
         )
         cancel_kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("← Back", callback_data=f"pass#upibuy_{dur_key}_{amount}")]
+            [InlineKeyboardButton("←︎ Back", callback_data=f"pass#upibuy_{dur_key}_{amount}", style="danger")]
         ])
         await query.message.edit_text(prompt_text, reply_markup=cancel_kb)
 
@@ -5672,6 +5826,7 @@ async def _process_pass_callback(client, query):
         res = await verify_upi_payment_via_gmail(utr, expected_amount)
 
         if res.get("success"):
+            u_name = user_name
             pending = _pending_utr_users.pop(user_id, {})
             order_id = pending.get('order_id') or f"UPI_{user_id}_{int(time.time())}"
             tier_val = (pending.get('tier') or 'basic').lower().strip()
@@ -5737,7 +5892,7 @@ async def _process_pass_callback(client, query):
         dur_key = parts[1]
         amount_inr = float(parts[2])
 
-        user_lang = await db.get_language(user_id)
+        user_lang = await get_cached_user_lang(user_id)
         is_hi = bool(user_lang == 'hi')
         is_hinglish = bool(user_lang == 'hinglish')
 
@@ -5774,7 +5929,7 @@ async def _process_pass_callback(client, query):
             err_text = res.get("error", "Failed to generate crypto invoice.")
             err_kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔄 पुनः प्रयास करें" if is_hi else "🔄 Retry", callback_data=data)],
-                [InlineKeyboardButton("वापस" if is_hi else "Back", callback_data="pass#method_crypto")]
+                [InlineKeyboardButton("←︎ वापस" if is_hi else "←︎ Back", callback_data="pass#method_crypto", style="danger")]
             ])
             return await query.message.edit_text(
                 f"❌ <b>{'क्रिप्टो इनवॉइस विफल' if is_hi else 'Crypto Invoice Failed'}</b>\n\n{err_text}",
@@ -5791,18 +5946,18 @@ async def _process_pass_callback(client, query):
         if is_hi:
             btn_verify_lbl = "पेमेंट वेरीफाई करें"
             btn_cancel_lbl = "अपना ऑर्डर कैंसिल करें"
-            btn_back_lbl = "वापस"
+            btn_back_lbl = "←︎ वापस"
         elif is_hinglish:
             btn_verify_lbl = "Verify Payment"
             btn_cancel_lbl = "Cancel your order"
-            btn_back_lbl = "Back"
+            btn_back_lbl = "←︎ Back"
         else:
             btn_verify_lbl = "Verify Payment"
             btn_cancel_lbl = "Cancel your order"
-            btn_back_lbl = "Back"
+            btn_back_lbl = "←︎ Back"
 
         tier = parts[3] if len(parts) > 3 else "basic"
-        rl_cfg = await db.get_delivery_rate_limit_config()
+        rl_cfg = await get_cached_rl_config()
         uiver = rl_cfg.get('pass_ui_version', 'v1')
 
         # Save order document to MongoDB
@@ -5852,26 +6007,18 @@ async def _process_pass_callback(client, query):
             )
 
         inv_api_kb = [
-            [{"text": btn_pay_lbl, "url": pay_link, "icon_custom_emoji_id": "5807527002374151568"}],
-            [{"text": btn_verify_lbl, "callback_data": f"pass#oxaverify_{track_id}_{dur_key}_{amount_inr}_{order_id}", "icon_custom_emoji_id": "5807492110059838726"}],
-            [{"text": btn_cancel_lbl, "callback_data": f"pass#cancel_{order_id}", "icon_custom_emoji_id": "5774077015388852135"}],
-            [{"text": btn_back_lbl, "callback_data": "pass#method_crypto"}]
+            [{"text": btn_pay_lbl, "url": pay_link, "icon_custom_emoji_id": "5807527002374151568", "style": "success"}],
+            [{"text": btn_verify_lbl, "callback_data": f"pass#oxaverify_{track_id}_{dur_key}_{amount_inr}_{order_id}", "icon_custom_emoji_id": "5807492110059838726", "style": "primary"}],
+            [{"text": btn_cancel_lbl, "callback_data": f"pass#cancel_{order_id}", "icon_custom_emoji_id": "5774077015388852135", "style": "danger"}],
+            [{"text": btn_back_lbl, "callback_data": "pass#method_crypto", "style": "danger"}]
         ]
         inv_kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton(btn_pay_lbl, url=pay_link)],
-            [InlineKeyboardButton(btn_verify_lbl, callback_data=f"pass#oxaverify_{track_id}_{dur_key}_{amount_inr}_{order_id}")],
-            [InlineKeyboardButton(btn_cancel_lbl, callback_data=f"pass#cancel_{order_id}")],
-            [InlineKeyboardButton(btn_back_lbl, callback_data="pass#method_crypto")]
+            [InlineKeyboardButton(btn_pay_lbl, url=pay_link, style="success")],
+            [InlineKeyboardButton(btn_verify_lbl, callback_data=f"pass#oxaverify_{track_id}_{dur_key}_{amount_inr}_{order_id}", style="primary")],
+            [InlineKeyboardButton(btn_cancel_lbl, callback_data=f"pass#cancel_{order_id}", style="danger")],
+            [InlineKeyboardButton(btn_back_lbl, callback_data="pass#method_crypto", style="danger")]
         ])
-        sent_ok = await send_or_edit_with_custom_icons(
-            client=client,
-            chat_id=query.message.chat.id,
-            text=inv_text,
-            inline_keyboard=inv_api_kb,
-            message_id=query.message.id
-        )
-        if not sent_ok:
-            await query.message.edit_text(inv_text, reply_markup=inv_kb)
+        await _render_pass_menu(client, query, inv_text, inv_api_kb, inv_kb)
 
         # Schedule automatic reminder (max 2 times under 10 minutes) if OxaPay crypto invoice not completed
         asyncio.create_task(schedule_pass_payment_reminder(
@@ -5983,11 +6130,11 @@ async def _process_pass_callback(client, query):
         amount = float(parts[2])
         tier = parts[3] if len(parts) > 3 else 'basic'
 
-        user_lang = await db.get_language(user_id)
+        user_lang = await get_cached_user_lang(user_id)
         is_hi = bool(user_lang == 'hi')
         is_hinglish = bool(user_lang == 'hinglish')
 
-        rl_cfg = await db.get_delivery_rate_limit_config()
+        rl_cfg = await get_cached_rl_config()
         uiver = rl_cfg.get('pass_ui_version', 'v1')
 
         # Show instant loading message with custom animated emoji 5220046725493828505
@@ -6020,7 +6167,7 @@ async def _process_pass_callback(client, query):
             err_text = res.get('error', 'Failed to generate payment link')
             err_kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔄 Retry", callback_data=data)],
-                [InlineKeyboardButton("← Back", callback_data="pass#method_cashfree")]
+                [InlineKeyboardButton("← Back", callback_data="pass#method_cashfree", style="danger")]
             ])
             return await query.message.edit_text(
                 f"❌ <b>Payment Order Failed</b>\n\n{err_text}",
@@ -6057,12 +6204,12 @@ async def _process_pass_callback(client, query):
             btn_verify_lbl = "Verify Payment"
             btn_switch_upi = "UPI (QR) से भुगतान करें"
             btn_cancel_lbl = "Cancel your order"
-            btn_back_lbl = "वापस"
+            btn_back_lbl = "←︎ वापस"
         elif is_hinglish:
             tier_badge = (f' (<emoji id="5805553606635559688">👑</emoji> Pro Tier)' if tier == 'pro' else f' (<emoji id="5890925363067886150">⚡</emoji> Basic Tier)') if uiver == 'v3' else ""
             inv_text = (
                 f'<emoji id="5920332557466997677">⚡</emoji> <b>Payment Invoice — Unlimited Delivery Pass</b>\n'
-                f"──────────────────────\n"
+                "──────────────────────\n"
                 f'<emoji id="5904630315946611415">👤</emoji> <b>Name:</b> {user_name}\n'
                 f'<emoji id="6021683099773966917">🆔</emoji> <b>User ID:</b> <code>{user_id}</code>\n'
                 f'<emoji id="6021435576513730578">👑</emoji> <b>Plan:</b> {dur_verbose.title()} Unlimited Delivery Pass{tier_badge}\n'
@@ -6077,12 +6224,12 @@ async def _process_pass_callback(client, query):
             btn_verify_lbl = "Verify Payment"
             btn_switch_upi = "Instead Pay with UPI (QR)"
             btn_cancel_lbl = "Cancel your order"
-            btn_back_lbl = "Back"
+            btn_back_lbl = "←︎ Back"
         else:
             tier_badge = (f' (<emoji id="5805553606635559688">👑</emoji> Pro Tier)' if tier == 'pro' else f' (<emoji id="5890925363067886150">⚡</emoji> Basic Tier)') if uiver == 'v3' else ""
             inv_text = (
                 f'<emoji id="5920332557466997677">⚡</emoji> <b>Payment Invoice — Unlimited Delivery Pass</b>\n'
-                f"──────────────────────\n"
+                "──────────────────────\n"
                 f'<emoji id="5904630315946611415">👤</emoji> <b>Name:</b> {user_name}\n'
                 f'<emoji id="6021683099773966917">🆔</emoji> <b>User ID:</b> <code>{user_id}</code>\n'
                 f'<emoji id="6021435576513730578">👑</emoji> <b>Plan:</b> {dur_verbose.title()} Unlimited Delivery Pass{tier_badge}\n'
@@ -6097,31 +6244,23 @@ async def _process_pass_callback(client, query):
             btn_verify_lbl = "Verify Payment"
             btn_switch_upi = "Instead Pay with UPI (QR)"
             btn_cancel_lbl = "Cancel your order"
-            btn_back_lbl = "Back"
+            btn_back_lbl = "←︎ Back"
 
         inv_api_kb = [
-            [{"text": btn_pay_lbl, "url": checkout_pay_link, "icon_custom_emoji_id": "5807527002374151568"}],
-            [{"text": btn_verify_lbl, "callback_data": f"pass#verify_{order_id}_{dur_key}_{amount}", "icon_custom_emoji_id": "5807492110059838726"}],
-            [{"text": btn_switch_upi, "callback_data": f"pass#switch_upi_{order_id}", "icon_custom_emoji_id": "5766975922620076409"}],
-            [{"text": btn_cancel_lbl, "callback_data": f"pass#cancel_{order_id}", "icon_custom_emoji_id": "5774077015388852135"}],
-            [{"text": btn_back_lbl, "callback_data": back_cb, "icon_custom_emoji_id": "5879857507198833579"}]
+            [{"text": btn_pay_lbl, "url": checkout_pay_link, "icon_custom_emoji_id": "5807527002374151568", "style": "success"}],
+            [{"text": btn_verify_lbl, "callback_data": f"pass#verify_{order_id}_{dur_key}_{amount}", "icon_custom_emoji_id": "5807492110059838726", "style": "primary"}],
+            [{"text": btn_switch_upi, "callback_data": f"pass#switch_upi_{order_id}", "icon_custom_emoji_id": "5766975922620076409", "style": "primary"}],
+            [{"text": btn_cancel_lbl, "callback_data": f"pass#cancel_{order_id}", "icon_custom_emoji_id": "5774077015388852135", "style": "danger"}],
+            [{"text": btn_back_lbl, "callback_data": back_cb, "style": "danger"}]
         ]
         inv_kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton(btn_pay_lbl, url=checkout_pay_link)],
-            [InlineKeyboardButton(btn_verify_lbl, callback_data=f"pass#verify_{order_id}_{dur_key}_{amount}")],
-            [InlineKeyboardButton(f"💳 {btn_switch_upi}", callback_data=f"pass#switch_upi_{order_id}")],
-            [InlineKeyboardButton(btn_cancel_lbl, callback_data=f"pass#cancel_{order_id}")],
-            [InlineKeyboardButton(btn_back_lbl, callback_data=back_cb)]
+            [InlineKeyboardButton(btn_pay_lbl, url=checkout_pay_link, style="success")],
+            [InlineKeyboardButton(btn_verify_lbl, callback_data=f"pass#verify_{order_id}_{dur_key}_{amount}", style="primary")],
+            [InlineKeyboardButton(f"💳 {btn_switch_upi}", callback_data=f"pass#switch_upi_{order_id}", style="primary")],
+            [InlineKeyboardButton(btn_cancel_lbl, callback_data=f"pass#cancel_{order_id}", style="danger")],
+            [InlineKeyboardButton(btn_back_lbl, callback_data=back_cb, style="danger")]
         ])
-        sent_ok = await send_or_edit_with_custom_icons(
-            client=client,
-            chat_id=query.message.chat.id,
-            text=inv_text,
-            inline_keyboard=inv_api_kb,
-            message_id=query.message.id
-        )
-        if not sent_ok:
-            await query.message.edit_text(inv_text, reply_markup=inv_kb)
+        await _render_pass_menu(client, query, inv_text, inv_api_kb, inv_kb)
 
         # 1. Launch real-time background auto-verifier (polls Cashfree every 5s & auto-activates on payment)
         asyncio.create_task(start_pass_cashfree_auto_verifier(
@@ -6250,7 +6389,7 @@ async def _process_pass_callback(client, query):
         cancel_order_id = "_".join(parts[1:])
         if cancel_order_id:
             await db.pass_orders.update_one({"order_id": cancel_order_id}, {"$set": {"status": "CANCELLED"}})
-        user_lang = await db.get_language(user_id)
+        user_lang = await get_cached_user_lang(user_id)
         is_hi = bool(user_lang == 'hi')
         is_hinglish = bool(user_lang == 'hinglish')
         if is_hi:
@@ -6269,7 +6408,7 @@ async def _process_pass_callback(client, query):
         if order_doc.get("status") == "PAID":
             return await query.answer("✅ This order has already been paid and activated!", show_alert=True)
 
-        user_lang = await db.get_language(user_id)
+        user_lang = await get_cached_user_lang(user_id)
         is_hi = bool(user_lang == 'hi')
         is_hinglish = bool(user_lang == 'hinglish')
         
@@ -6313,7 +6452,7 @@ async def _process_pass_callback(client, query):
         user_name = order_doc.get("user_name", query.from_user.first_name if query.from_user else "User")
         p_label = int(base_amt) if float(base_amt).is_integer() else base_amt
 
-        rl_cfg = await db.get_delivery_rate_limit_config()
+        rl_cfg = await get_cached_rl_config()
         uiver = rl_cfg.get('pass_ui_version', 'v1')
         if uiver == 'v3':
             back_cb = f"pass#tier_{tier}"
@@ -6341,7 +6480,7 @@ async def _process_pass_callback(client, query):
             btn_verify_lbl = "Verify Payment"
             btn_switch_upi = "UPI (QR) से भुगतान करें"
             btn_cancel_lbl = "Cancel your order"
-            btn_back_lbl = "वापस"
+            btn_back_lbl = "←︎ वापस"
         elif is_hinglish:
             tier_badge = (f' (<emoji id="5805553606635559688">👑</emoji> Pro Tier)' if tier == 'pro' else f' (<emoji id="5890925363067886150">⚡</emoji> Basic Tier)') if uiver == 'v3' else ""
             inv_text = (
@@ -6361,7 +6500,7 @@ async def _process_pass_callback(client, query):
             btn_verify_lbl = "Verify Payment"
             btn_switch_upi = "Instead Pay with UPI (QR)"
             btn_cancel_lbl = "Cancel your order"
-            btn_back_lbl = "Back"
+            btn_back_lbl = "←︎ Back"
         else:
             tier_badge = (f' (<emoji id="5805553606635559688">👑</emoji> Pro Tier)' if tier == 'pro' else f' (<emoji id="5890925363067886150">⚡</emoji> Basic Tier)') if uiver == 'v3' else ""
             inv_text = (
@@ -6381,31 +6520,24 @@ async def _process_pass_callback(client, query):
             btn_verify_lbl = "Verify Payment"
             btn_switch_upi = "Instead Pay with UPI (QR)"
             btn_cancel_lbl = "Cancel your order"
-            btn_back_lbl = "Back"
+            btn_back_lbl = "←︎ Back"
 
         inv_api_kb = [
-            [{"text": btn_pay_lbl, "url": checkout_pay_link, "icon_custom_emoji_id": "5807527002374151568"}],
-            [{"text": btn_verify_lbl, "callback_data": f"pass#verify_{order_id}_{dur_key}_{base_amt}", "icon_custom_emoji_id": "5807492110059838726"}],
-            [{"text": btn_switch_upi, "callback_data": f"pass#switch_upi_{order_id}", "icon_custom_emoji_id": "5766975922620076409"}],
-            [{"text": btn_cancel_lbl, "callback_data": f"pass#cancel_{order_id}", "icon_custom_emoji_id": "5774077015388852135"}],
-            [{"text": btn_back_lbl, "callback_data": back_cb, "icon_custom_emoji_id": "5879857507198833579"}]
+            [{"text": btn_pay_lbl, "url": checkout_pay_link, "icon_custom_emoji_id": "5807527002374151568", "style": "success"}],
+            [{"text": btn_verify_lbl, "callback_data": f"pass#verify_{order_id}_{dur_key}_{base_amt}", "icon_custom_emoji_id": "5807492110059838726", "style": "primary"}],
+            [{"text": btn_switch_upi, "callback_data": f"pass#switch_upi_{order_id}", "icon_custom_emoji_id": "5766975922620076409", "style": "primary"}],
+            [{"text": btn_cancel_lbl, "callback_data": f"pass#cancel_{order_id}", "icon_custom_emoji_id": "5774077015388852135", "style": "danger"}],
+            [{"text": btn_back_lbl, "callback_data": back_cb, "style": "danger"}]
         ]
         inv_kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton(btn_pay_lbl, url=checkout_pay_link)],
-            [InlineKeyboardButton(btn_verify_lbl, callback_data=f"pass#verify_{order_id}_{dur_key}_{base_amt}")],
-            [InlineKeyboardButton(f"💳 {btn_switch_upi}", callback_data=f"pass#switch_upi_{order_id}")],
-            [InlineKeyboardButton(btn_cancel_lbl, callback_data=f"pass#cancel_{order_id}")],
-            [InlineKeyboardButton(btn_back_lbl, callback_data=back_cb)]
+            [InlineKeyboardButton(btn_pay_lbl, url=checkout_pay_link, style="success")],
+            [InlineKeyboardButton(btn_verify_lbl, callback_data=f"pass#verify_{order_id}_{dur_key}_{base_amt}", style="primary")],
+            [InlineKeyboardButton(f"💳 {btn_switch_upi}", callback_data=f"pass#switch_upi_{order_id}", style="primary")],
+            [InlineKeyboardButton(btn_cancel_lbl, callback_data=f"pass#cancel_{order_id}", style="danger")],
+            [InlineKeyboardButton(btn_back_lbl, callback_data=back_cb, style="danger")]
         ])
 
-        sent_ok = await send_or_edit_with_custom_icons(
-            client=client,
-            chat_id=query.message.chat.id,
-            text=inv_text,
-            inline_keyboard=inv_api_kb
-        )
-        if not sent_ok:
-            await client.send_message(chat_id=query.message.chat.id, text=inv_text, reply_markup=inv_kb)
+        await _render_pass_menu(client, query, inv_text, inv_api_kb, inv_kb)
 
         asyncio.create_task(start_pass_cashfree_auto_verifier(
             client=client,
@@ -6425,7 +6557,7 @@ async def _process_pass_callback(client, query):
         if order_doc.get("status") == "PAID":
             return await query.answer("✅ This order has already been paid and activated!", show_alert=True)
 
-        rl_cfg = await db.get_delivery_rate_limit_config()
+        rl_cfg = await get_cached_rl_config()
         from config import Config
         raw_upi = str(rl_cfg.get("upi_id") or getattr(Config, "UPI_ID", "") or os.environ.get("UPI_ID", "") or "").strip()
         payee_name = str(rl_cfg.get("upi_name") or "Arya Delivery Pass").strip()
@@ -6435,8 +6567,9 @@ async def _process_pass_callback(client, query):
         dur_key = order_doc.get("duration") or order_doc.get("plan") or "1d"
         base_amt = float(order_doc.get("base_amount") or order_doc.get("amount") or 15)
         tier = order_doc.get("tier", "basic")
-        user_lang = await db.get_language(user_id)
+        user_lang = await get_cached_user_lang(user_id)
         is_hi = bool(user_lang == 'hi')
+        is_hinglish = bool(user_lang == 'hinglish')
 
         # Check existing dynamic amount or generate new one
         dyn_amount = order_doc.get("dyn_amount")
@@ -6488,14 +6621,16 @@ async def _process_pass_callback(client, query):
                     f"• <b>भुगतान की राशि:</b> <code>₹{dyn_amount:.2f}</code>\n"
                     f"• <b>UPI ID:</b> <code>{raw_upi}</code> (कॉपी करने के लिए टैप करें)\n"
                     f"• <b>ऑर्डर ID:</b> <code>{order_id}</code>\n\n"
+                    '<blockquote expandable>'
                     '<emoji id="5807800879553715710">📲</emoji> <b>भुगतान निर्देश:</b>\n'
                     "1. ऊपर दिए गए QR कोड को स्कैन करें या सीधे UPI ID पर पेमेंट करें।\n"
                     f"2. भुगतान पूरा होने के बाद <b>5 मिनट के भीतर</b> पेमेंट का <b>स्क्रीनशॉट (Screenshot)</b> इसी चैट में फोटो के रूप में भेजें।\n"
-                    "3. स्क्रीनशॉट मिलते ही एडमिन द्वारा वेरीफाई करके आपका पास तुरंत एक्टिवेट कर दिया जाएगा!\n\n"
+                    "3. स्क्रीनशॉट मिलते ही एडमिन द्वारा वेरीफाई करके आपका पास तुरंत एक्टिवेट कर दिया जाएगा!"
+                    '</blockquote>\n\n'
                     '<emoji id="6034898821517940846">⏰</emoji> <b>स्क्रीनशॉट की प्रतीक्षा...</b> (5 मिनट के भीतर भेजें)'
                 )
                 btn_switch_cf = "Cashfree से भुगतान करें"
-                btn_back = "वापस"
+                btn_back = "←︎ वापस"
             elif is_hinglish:
                 plan_name = format_plan_name_friendly(dur_key, lang='en')
                 tier_badge = (f' (<emoji id="5805553606635559688">👑</emoji> Pro Tier)' if tier == 'pro' else f' (<emoji id="5890925363067886150">⚡</emoji> Basic Tier)') if uiver == 'v3' else ""
@@ -6506,14 +6641,16 @@ async def _process_pass_callback(client, query):
                     f"• <b>Amount to Pay:</b> <code>₹{dyn_amount:.2f}</code>\n"
                     f"• <b>UPI ID:</b> <code>{raw_upi}</code> (Tap to Copy)\n"
                     f"• <b>Order ID:</b> <code>{order_id}</code>\n\n"
+                    '<blockquote expandable>'
                     '<emoji id="5807800879553715710">📲</emoji> <b>Payment Instructions:</b>\n'
                     "1. Upar diye gaye QR code ko scan karein ya direct UPI ID par payment karein.\n"
                     f"2. Payment hone ke baad <b>5 minute ke andar</b> payment ka <b>Screenshot</b> isi chat me photo format me send karein.\n"
-                    "3. Admin dwara screenshot verify hote hi aapka Unlimited Pass turant activate ho jayega!\n\n"
+                    "3. Admin dwara screenshot verify hote hi aapka Unlimited Pass turant activate ho jayega!"
+                    '</blockquote>\n\n'
                     '<emoji id="6034898821517940846">⏰</emoji> <b>Waiting for Screenshot...</b> (5 minute ke andar send karein)'
                 )
                 btn_switch_cf = "Cashfree se Pay Karein"
-                btn_back = "Back"
+                btn_back = "←︎ Back"
             else:
                 plan_name = format_plan_name_friendly(dur_key, lang='en')
                 tier_badge = (f' (<emoji id="5805553606635559688">👑</emoji> Pro Tier)' if tier == 'pro' else f' (<emoji id="5890925363067886150">⚡</emoji> Basic Tier)') if uiver == 'v3' else ""
@@ -6524,22 +6661,24 @@ async def _process_pass_callback(client, query):
                     f"• <b>Exact Amount to Pay:</b> <code>₹{dyn_amount:.2f}</code>\n"
                     f"• <b>UPI ID:</b> <code>{raw_upi}</code> (Tap to Copy)\n"
                     f"• <b>Order ID:</b> <code>{order_id}</code>\n\n"
+                    '<blockquote expandable>'
                     '<emoji id="5807800879553715710">📲</emoji> <b>Payment Instructions:</b>\n'
                     "1. Scan the QR code above or pay directly to the UPI ID.\n"
                     f"2. After making payment, please send the <b>Payment Screenshot within 5 minutes</b> in this chat.\n"
-                    "3. Our admin team will verify your screenshot and activate your pass immediately!\n\n"
+                    "3. Our admin team will verify your screenshot and activate your pass immediately!"
+                    '</blockquote>\n\n'
                     '<emoji id="6034898821517940846">⏰</emoji> <b>Waiting for Screenshot...</b> (Submit within 5 minutes)'
                 )
                 btn_switch_cf = "Instead Pay with Cashfree"
-                btn_back = "Back"
+                btn_back = "←︎ Back"
 
             photo_kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton(f"⚡ {btn_switch_cf}", callback_data=f"pass#switch_cf_{order_id}")],
-                [InlineKeyboardButton(f"« {btn_back}", callback_data=back_cb)]
+                [InlineKeyboardButton(f"⚡ {btn_switch_cf}", callback_data=f"pass#switch_cf_{order_id}", style="primary")],
+                [InlineKeyboardButton(btn_back, callback_data=back_cb, style="danger")]
             ])
             photo_api_kb = [
-                [{"text": btn_switch_cf, "callback_data": f"pass#switch_cf_{order_id}", "icon_custom_emoji_id": "5283232570660634549"}],
-                [{"text": btn_back, "callback_data": back_cb, "icon_custom_emoji_id": "5879857507198833579"}]
+                [{"text": btn_switch_cf, "callback_data": f"pass#switch_cf_{order_id}", "icon_custom_emoji_id": "5283232570660634549", "style": "primary"}],
+                [{"text": btn_back, "callback_data": back_cb, "style": "danger"}]
             ]
         else:
             if is_hi:
@@ -6552,15 +6691,17 @@ async def _process_pass_callback(client, query):
                     f"• <b>भुगतान की सटीक राशि:</b> <code>₹{dyn_amount:.2f}</code>\n"
                     f"• <b>UPI ID:</b> <code>{raw_upi}</code> (कॉपी करने के लिए टैप करें)\n"
                     f"• <b>ऑर्डर ID:</b> <code>{order_id}</code>\n\n"
+                    '<blockquote expandable>'
                     '<emoji id="5807800879553715710">📲</emoji> <b>भुगतान निर्देश:</b>\n'
                     "1. ऊपर दिए गए QR कोड को स्कैन करें या सीधे UPI ID पर पेमेंट करें।\n"
                     f"2. बिल्कुल सटीक <b>₹{dyn_amount:.2f}</b> का भुगतान करें (पैसे कम या ज्यादा न करें)।\n"
-                    "3. <b>ऑटोमैटिक वेरिफिकेशन:</b> पेमेंट करने के 5-15 सेकंड में सिस्टम ऑटोमैटिकली पास एक्टिवेट कर देगा।\n\n"
+                    "3. <b>ऑटोमैटिक वेरिफिकेशन:</b> पेमेंट करने के 5-15 सेकंड में सिस्टम ऑटोमैटिकली पास एक्टिवेट कर देगा।"
+                    '</blockquote>\n\n'
                     '<emoji id="6034898821517940846">⏰</emoji> <b>भुगतान की प्रतीक्षा में...</b> (10 मिनट के लिए वैध)'
                 )
                 btn_status = "पेमेंट स्टेटस चेक करें"
                 btn_switch_cf = "Cashfree से भुगतान करें"
-                btn_back = "वापस"
+                btn_back = "←︎ वापस"
             elif is_hinglish:
                 plan_name = format_plan_name_friendly(dur_key, lang='en')
                 tier_badge = (f' (<emoji id="5805553606635559688">👑</emoji> Pro Tier)' if tier == 'pro' else f' (<emoji id="5890925363067886150">⚡</emoji> Basic Tier)') if uiver == 'v3' else ""
@@ -6571,15 +6712,17 @@ async def _process_pass_callback(client, query):
                     f"• <b>Exact Amount to Pay:</b> <code>₹{dyn_amount:.2f}</code>\n"
                     f"• <b>UPI ID:</b> <code>{raw_upi}</code> (Tap to Copy)\n"
                     f"• <b>Order ID:</b> <code>{order_id}</code>\n\n"
+                    '<blockquote expandable>'
                     '<emoji id="5807800879553715710">📲</emoji> <b>Payment Instructions:</b>\n'
                     "1. Upar diye gaye QR code ko scan karein ya direct UPI ID par payment karein.\n"
                     f"2. Pay EXACTLY <b>₹{dyn_amount:.2f}</b> (do not round off paise).\n"
-                    "3. <b>Zero Hassle:</b> Payment ke 5-15 seconds me system automatically pass activate kar dega.\n\n"
+                    "3. <b>Zero Hassle:</b> Payment ke 5-15 seconds me system automatically pass activate kar dega."
+                    '</blockquote>\n\n'
                     '<emoji id="6034898821517940846">⏰</emoji> <b>Waiting for Payment...</b> (Valid for 10 Minutes)'
                 )
                 btn_status = "Check Payment Status"
                 btn_switch_cf = "Cashfree se Pay Karein"
-                btn_back = "Back"
+                btn_back = "←︎ Back"
             else:
                 plan_name = format_plan_name_friendly(dur_key, lang='en')
                 tier_badge = (f' (<emoji id="5805553606635559688">👑</emoji> Pro Tier)' if tier == 'pro' else f' (<emoji id="5890925363067886150">⚡</emoji> Basic Tier)') if uiver == 'v3' else ""
@@ -6590,25 +6733,27 @@ async def _process_pass_callback(client, query):
                     f"• <b>Exact Amount to Pay:</b> <code>₹{dyn_amount:.2f}</code>\n"
                     f"• <b>UPI ID:</b> <code>{raw_upi}</code> (Tap to Copy)\n"
                     f"• <b>Order ID:</b> <code>{order_id}</code>\n\n"
+                    '<blockquote expandable>'
                     '<emoji id="5807800879553715710">📲</emoji> <b>Payment Instructions:</b>\n'
                     "1. Scan the QR code above or pay directly to the UPI ID.\n"
                     f"2. Pay EXACTLY <b>₹{dyn_amount:.2f}</b> (do not round off paise).\n"
-                    "3. <b>Zero Hassle:</b> Our automated system verifies payment within 5-15 seconds.\n\n"
+                    "3. <b>Zero Hassle:</b> Our automated system verifies payment within 5-15 seconds."
+                    '</blockquote>\n\n'
                     '<emoji id="6034898821517940846">⏰</emoji> <b>Waiting for Payment...</b> (Valid for 10 Minutes)'
                 )
                 btn_status = "Check Payment Status"
                 btn_switch_cf = "Instead Pay with Cashfree"
-                btn_back = "Back"
+                btn_back = "←︎ Back"
 
             photo_kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton(f"🔄 {btn_status}", callback_data=f"pass#upistatus_{order_id}_{dur_key}_{dyn_amount}")],
-                [InlineKeyboardButton(f"⚡ {btn_switch_cf}", callback_data=f"pass#switch_cf_{order_id}")],
-                [InlineKeyboardButton(f"« {btn_back}", callback_data=back_cb)]
+                [InlineKeyboardButton(f"🔄 {btn_status}", callback_data=f"pass#upistatus_{order_id}_{dur_key}_{dyn_amount}", style="success")],
+                [InlineKeyboardButton(f"⚡ {btn_switch_cf}", callback_data=f"pass#switch_cf_{order_id}", style="primary")],
+                [InlineKeyboardButton(btn_back, callback_data=back_cb, style="danger")]
             ])
             photo_api_kb = [
-                [{"text": btn_status, "callback_data": f"pass#upistatus_{order_id}_{dur_key}_{dyn_amount}", "icon_custom_emoji_id": "5807492110059838726"}],
-                [{"text": btn_switch_cf, "callback_data": f"pass#switch_cf_{order_id}", "icon_custom_emoji_id": "5283232570660634549"}],
-                [{"text": btn_back, "callback_data": back_cb, "icon_custom_emoji_id": "5879857507198833579"}]
+                [{"text": btn_status, "callback_data": f"pass#upistatus_{order_id}_{dur_key}_{dyn_amount}", "icon_custom_emoji_id": "5807492110059838726", "style": "success"}],
+                [{"text": btn_switch_cf, "callback_data": f"pass#switch_cf_{order_id}", "icon_custom_emoji_id": "5283232570660634549", "style": "primary"}],
+                [{"text": btn_back, "callback_data": back_cb, "style": "danger"}]
             ]
 
         qr_buf = generate_upi_qr_bytes(raw_upi, dyn_amount, payee_name, order_id)
@@ -6653,13 +6798,12 @@ async def _process_pass_callback(client, query):
 
     elif data == "pass#back":
         # Return to rate limit message
-        rl_cfg = await db.get_delivery_rate_limit_config()
+        rl_cfg = await get_cached_rl_config()
         from database import format_duration_verbose, format_duration_friendly
         max_limit = int(rl_cfg.get('max_limit', 5))
         window_seconds = int(rl_cfg.get('window_seconds', int(rl_cfg.get('window_hours', 12)) * 3600))
         hits = await db.get_user_delivery_hits(user_id, window_seconds)
-        import random
-        rate_limit_lang = random.choice(['en', 'hi', 'hinglish'])
+        rate_limit_lang = await get_cached_user_lang(user_id)
         
         import time as _t
         rem_sec = window_seconds
@@ -6708,20 +6852,22 @@ async def _process_pass_callback(client, query):
                     {
                         "text": "अनलिमिटेड एक्सेस अनलॉक करें",
                         "callback_data": "pass#unlock_menu",
-                        "icon_custom_emoji_id": "6030443364178992166"
+                        "icon_custom_emoji_id": "6030443364178992166",
+                        "style": "success"
                     }
                 ],
                 [
                     {
                         "text": "Buy This Story Only",
                         "url": story_buy_url,
-                        "icon_custom_emoji_id": "6104800784354909891"
+                        "icon_custom_emoji_id": "6104800784354909891",
+                        "style": "primary"
                     }
                 ]
             ]
             unlock_kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔓 अनलिमिटेड एक्सेस अनलॉक करें", callback_data="pass#unlock_menu")],
-                [InlineKeyboardButton("💎 Buy This Story Only", url=story_buy_url)]
+                [InlineKeyboardButton("🔓 अनलिमिटेड एक्सेस अनलॉक करें", callback_data="pass#unlock_menu", style="success")],
+                [InlineKeyboardButton("💎 Buy This Story Only", url=story_buy_url, style="primary")]
             ])
         elif rate_limit_lang == 'hinglish':
             limit_text = (
@@ -6737,20 +6883,22 @@ async def _process_pass_callback(client, query):
                     {
                         "text": "Unlimited Access Unlock Karein",
                         "callback_data": "pass#unlock_menu",
-                        "icon_custom_emoji_id": "6030443364178992166"
+                        "icon_custom_emoji_id": "6030443364178992166",
+                        "style": "success"
                     }
                 ],
                 [
                     {
                         "text": "Buy This Story Only",
                         "url": story_buy_url,
-                        "icon_custom_emoji_id": "6104800784354909891"
+                        "icon_custom_emoji_id": "6104800784354909891",
+                        "style": "primary"
                     }
                 ]
             ]
             unlock_kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔓 Unlimited Access Unlock Karein", callback_data="pass#unlock_menu")],
-                [InlineKeyboardButton("💎 Buy This Story Only", url=story_buy_url)]
+                [InlineKeyboardButton("🔓 Unlimited Access Unlock Karein", callback_data="pass#unlock_menu", style="success")],
+                [InlineKeyboardButton("💎 Buy This Story Only", url=story_buy_url, style="primary")]
             ])
         else:
             limit_text = (
@@ -6766,33 +6914,24 @@ async def _process_pass_callback(client, query):
                     {
                         "text": "Unlock Unlimited Access",
                         "callback_data": "pass#unlock_menu",
-                        "icon_custom_emoji_id": "6030443364178992166"
+                        "icon_custom_emoji_id": "6030443364178992166",
+                        "style": "success"
                     }
                 ],
                 [
                     {
                         "text": "Buy This Story Only",
                         "url": story_buy_url,
-                        "icon_custom_emoji_id": "6104800784354909891"
+                        "icon_custom_emoji_id": "6104800784354909891",
+                        "style": "primary"
                     }
                 ]
             ]
             unlock_kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔓 Unlock Unlimited Access", callback_data="pass#unlock_menu")],
-                [InlineKeyboardButton("💎 Buy This Story Only", url=story_buy_url)]
+                [InlineKeyboardButton("🔓 Unlock Unlimited Access", callback_data="pass#unlock_menu", style="success")],
+                [InlineKeyboardButton("💎 Buy This Story Only", url=story_buy_url, style="primary")]
             ])
-        sent_ok = await send_or_edit_with_custom_icons(
-            client=client,
-            chat_id=query.message.chat.id,
-            text=limit_text,
-            inline_keyboard=limit_api_kb,
-            message_id=query.message.id
-        )
-        if not sent_ok:
-            unlock_kb = InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔓 Unlock Access Via Payment", callback_data="pass#unlock_menu")
-            ]])
-            await query.message.edit_text(limit_text, reply_markup=unlock_kb)
+        await _render_pass_menu(client, query, limit_text, limit_api_kb, unlock_kb)
 
 
 # 
@@ -6893,7 +7032,7 @@ async def _process_store_callback(client: Client, query: CallbackQuery):
         show_id = data.split("store_demo_")[1]
         from plugins.store_bot import DEFAULT_DEMO_TEXT
         back_kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔙 Back to Show Details", callback_data=f"store_view_{show_id}")]
+            [InlineKeyboardButton("←︎ Back to Show Details", callback_data=f"store_view_{show_id}", style="danger")]
         ])
         await query.message.edit_text(DEFAULT_DEMO_TEXT, reply_markup=back_kb, parse_mode=PM)
 
@@ -6928,9 +7067,9 @@ async def _process_store_callback(client: Client, query: CallbackQuery):
         pay_url = res["payment_link"]
         order_id = res["order_id"]
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("6107442434055086407 Pay Now (Cards, NetBanking, UPI)", url=pay_url)],
-            [InlineKeyboardButton("🔄 Check Payment Status", callback_data=f"store_chk_{order_id}")],
-            [InlineKeyboardButton("🔙 Back", callback_data=f"store_buy_{show_id}")]
+            [InlineKeyboardButton("6107442434055086407 Pay Now (Cards, NetBanking, UPI)", url=pay_url, style="success")],
+            [InlineKeyboardButton("🔄 Check Payment Status", callback_data=f"store_chk_{order_id}", style="primary")],
+            [InlineKeyboardButton("←︎ Back", callback_data=f"store_buy_{show_id}", style="danger")]
         ])
         await query.message.edit_text(
             f"<b>💳 Cashfree Order Created</b>\n\n"
@@ -6981,8 +7120,8 @@ async def _process_store_callback(client: Client, query: CallbackQuery):
 
         upi_link = f"upi://pay?pa={upi_id}&pn=StoryTVStore&am={cost}&tn={order_id}"
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("6030410254276106984 Pay Via UPI App", url=upi_link)],
-            [InlineKeyboardButton("🔙 Back", callback_data=f"store_buy_{show_id}")]
+            [InlineKeyboardButton("6030410254276106984 Pay Via UPI App", url=upi_link, style="success")],
+            [InlineKeyboardButton("←︎ Back", callback_data=f"store_buy_{show_id}", style="danger")]
         ])
         await query.message.edit_text(
             f"<b>💳 Pay Via UPI (Direct)</b>\n\n"
@@ -7006,7 +7145,7 @@ async def _process_store_callback(client: Client, query: CallbackQuery):
             if sh:
                 lines.append(f"• <b>{sh['title']}</b> ({sh.get('duration', 'Full Show')})")
                 buttons.append([InlineKeyboardButton(f"📥 Re-Deliver: {sh['title'][:25]}", callback_data=f"store_redeliver_{ps['show_id']}")])
-        buttons.append([InlineKeyboardButton("🔙 Back to Menu", callback_data="store_browse")])
+        buttons.append([InlineKeyboardButton("←︎ Back to Menu", callback_data="store_browse", style="danger")])
         await query.message.edit_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(buttons), parse_mode=PM)
 
     elif data.startswith("store_redeliver_"):
@@ -7026,7 +7165,7 @@ async def _process_store_callback(client: Client, query: CallbackQuery):
             st_icon = '✅' if st == 'SUCCESS' else '⏳'
             lines.append(f"{st_icon} <b>{o.get('show_title', 'Show')}</b> — ₹{o.get('amount', 0)} ({t_str})")
         lines.append("\n<i>All purchased shows are available for re-delivery in <b>📹 My Shows</b>.</i>")
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Menu", callback_data="store_browse")]])
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("←︎ Back to Menu", callback_data="store_browse", style="danger")]])
         await query.message.edit_text("\n".join(lines), reply_markup=kb, parse_mode=PM)
 
     elif data == "store_browse":
@@ -7044,7 +7183,7 @@ async def _process_store_callback(client: Client, query: CallbackQuery):
             "• <b>Re-download Anytime:</b>\n"
             "Aap kabhi bhi <b>📹 My Shows</b> button se apni kharidi hui videos dobara mangwa sakte hain!"
         )
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Menu", callback_data="store_browse")]])
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("←︎ Back to Menu", callback_data="store_browse", style="danger")]])
         await query.message.edit_text(help_text, reply_markup=kb, parse_mode=PM)
 
 
@@ -7104,6 +7243,7 @@ def register_share_handlers(app: Client):
         except BaseException as e:
             import traceback
             import datetime
+            logger.exception(f"[ShareBot] Exception in _process_start: {e}")
             with open("bot_crash.log", "a", encoding="utf-8") as f:
                 f.write(f"\n[{datetime.datetime.now()}] Exception in _process_start:\n")
                 f.write(traceback.format_exc() + "\n")
@@ -7135,14 +7275,14 @@ def register_share_handlers(app: Client):
         user_id = message.from_user.id if message.from_user else 0
         if (await db.get_ban_status(user_id)).get('is_banned'): return
         txt = "<b>»  " + _sc("Support") + "</b>\n\n<i>" + _sc("If you need help or have any questions, join our support group.") + "</i>"
-        markup = InlineKeyboardMarkup([[InlineKeyboardButton("»  " + _sc("Support Group"), url=SUPPORT_LINK)]])
+        markup = InlineKeyboardMarkup([[InlineKeyboardButton("»  " + _sc("Support Group"), url=SUPPORT_LINK, style="danger")]])
         await message.reply_text(txt, reply_markup=markup, disable_web_page_preview=True)
 
     async def _cmd_updates(client, message):
         user_id = message.from_user.id if message.from_user else 0
         if (await db.get_ban_status(user_id)).get('is_banned'): return
         txt = "<b>»  " + _sc("Updates") + "</b>\n\n<i>" + _sc("Stay updated with our latest news and announcements.") + "</i>"
-        markup = InlineKeyboardMarkup([[InlineKeyboardButton("»  " + _sc("Update Channel"), url=UPDATE_LINK)]])
+        markup = InlineKeyboardMarkup([[InlineKeyboardButton("»  " + _sc("Update Channel"), url=UPDATE_LINK, style="primary")]])
         await message.reply_text(txt, reply_markup=markup, disable_web_page_preview=True)
 
     app.add_handler(MessageHandler(_cmd_about, filters.private & filters.command("about")))
@@ -7191,6 +7331,19 @@ def register_share_handlers(app: Client):
         _handle_share_bot_utr_message,
         filters.private & filters.text & ~filters.command(["start", "help", "about", "support", "updates", "broadcast", "premium", "norestrictions"])
     ), group=10)
+
+    # Add AI Enhancer support to Delivery Bot seamlessly
+    try:
+        from plugins.enhancer import enhance_offer_handler, enhance_execute_cb
+        app.add_handler(MessageHandler(
+            enhance_offer_handler,
+            filters.private & (filters.photo | filters.document) & ~filters.forwarded
+        ))
+        app.add_handler(CallbackQueryHandler(
+            enhance_execute_cb,
+            filters.regex(r'^enh#do$')
+        ))
+    except ImportError: pass
     logger.info(f"Handlers registered on {app.name}")
 
 
@@ -7539,10 +7692,12 @@ async def run_pass_expiry_monitor_loop():
                     btn_renew = "Renew Pass"
 
                 rem_api_buttons = [
-                    [{"text": btn_renew, "callback_data": "pass#unlock_menu", "icon_custom_emoji_id": "5217822164362739968"}]
+                    [{"text": btn_renew, "callback_data": "pass#unlock_menu", "icon_custom_emoji_id": "5217822164362739968", "style": "success"}],
+                    [{"text": "Support", "url": "https://t.me/AryaHelpTG", "icon_custom_emoji_id": "6030833407339008632", "style": "danger"}]
                 ]
                 rem_buttons = [
-                    [InlineKeyboardButton(f"👑 {btn_renew}", callback_data="pass#unlock_menu")]
+                    [InlineKeyboardButton(f"👑 {btn_renew}", callback_data="pass#unlock_menu", style="success")],
+                    [InlineKeyboardButton("💬 Support", url="https://t.me/AryaHelpTG", style="danger")]
                 ]
 
                 try:
@@ -7614,10 +7769,12 @@ async def run_pass_expiry_monitor_loop():
                     btn_renew = "👑 Renew Pass"
 
                 exp_api_buttons = [
-                    [{"text": btn_renew, "callback_data": "pass#unlock_menu", "icon_custom_emoji_id": "5217822164362739968"}]
+                    [{"text": btn_renew, "callback_data": "pass#unlock_menu", "icon_custom_emoji_id": "5217822164362739968", "style": "success"}],
+                    [{"text": "Support", "url": "https://t.me/AryaHelpTG", "icon_custom_emoji_id": "6030833407339008632", "style": "danger"}]
                 ]
                 exp_buttons = [
-                    [InlineKeyboardButton(btn_renew, callback_data="pass#unlock_menu")]
+                    [InlineKeyboardButton(btn_renew, callback_data="pass#unlock_menu", style="success")],
+                    [InlineKeyboardButton("💬 Support", url="https://t.me/AryaHelpTG", style="danger")]
                 ]
 
                 try:
@@ -7648,7 +7805,7 @@ async def run_pass_expiry_monitor_loop():
             logger.warning(f"[PASS-EXPIRY-MONITOR] Error in monitor loop: {e}")
 
 
-async def start_share_bot():
+async def start_share_bot(*args, **kwargs):
     """Start all Share Bot clients from DB."""
     global share_clients
 
@@ -7669,27 +7826,66 @@ async def start_share_bot():
         return
 
     for index, b in enumerate(bots):
+        token = str(b.get('token', '')).strip()
+        if not token:
+            continue
+        b_id_str = str(b.get('id', ''))
+        register_bot_token(b_id_str, token)
+
+        # Ensure any stale webhook is cleared so updates reach the bot
         try:
-            import os
+            session = _get_shared_bot_api_session()
+            asyncio.create_task(session.get(f"https://api.telegram.org/bot{token}/deleteWebhook"))
+        except Exception:
+            pass
+
+        sess_name = f"share_bot_{b_id_str}_{index}"
+        try:
             os.makedirs("sessions", exist_ok=True)
             sc = Client(
-                name=f"share_bot_{b['id']}_{index}",
-                bot_token=b['token'],
+                name=sess_name,
+                bot_token=token,
                 api_id=Config.API_ID,
                 api_hash=Config.API_HASH,
-                workdir="sessions"
+                workdir="sessions",
+                skip_updates=True
             )
-            sc.bot_token = b['token']
-            _share_bot_token_cache[str(b['id'])] = b['token']
+            sc.bot_token = token
+            register_share_handlers(sc)
             await sc.start()
             sc.is_initialized = True
-            register_share_handlers(sc)
-            # ← Always store as STRING so live_batch / other lookups via str() always match
-            share_clients[str(b['id'])] = sc
-            logger.info(f"Share Bot started: @{sc.me.username} [{b['name']}]")
         except Exception as e:
-            logger.error(f"Failed to start Share Bot '{b['name']}': {e}")
+            logger.warning(f"Disk session startup failed for Share Bot '{b.get('name')}' ({e}); retrying in_memory...")
+            try:
+                import glob as _glob
+                for _sf in _glob.glob(os.path.join("sessions", f"{sess_name}.session*")):
+                    try:
+                        os.remove(_sf)
+                    except Exception:
+                        pass
+                sc = Client(
+                    name=f"{sess_name}_mem",
+                    bot_token=token,
+                    api_id=Config.API_ID,
+                    api_hash=Config.API_HASH,
+                    in_memory=True,
+                    skip_updates=True
+                )
+                sc.bot_token = token
+                register_share_handlers(sc)
+                await sc.start()
+                sc.is_initialized = True
+            except Exception as e2:
+                logger.error(f"Failed to start Share Bot '{b.get('name')}': {e2}")
+                continue
+
+        if getattr(sc, "me", None) and getattr(sc.me, "id", None):
+            register_bot_token(str(sc.me.id), token)
+            share_clients[str(sc.me.id)] = sc
+        share_clients[b_id_str] = sc
+        logger.info(f"Share Bot started: @{getattr(sc.me, 'username', 'unknown')} [{b.get('name')}]")
 
     # Launch background pass expiry monitor loop
     asyncio.create_task(run_pass_expiry_monitor_loop())
+
 

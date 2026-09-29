@@ -13,6 +13,8 @@ from pyrogram.types import (
     InlineKeyboardButton, InlineKeyboardMarkup,
     ReplyKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton
 )
+from bot import apply_global_button_patches
+apply_global_button_patches()
 from database import db
 from plugins.test import CLIENT
 logger = logging.getLogger(__name__)
@@ -583,16 +585,17 @@ async def sl_callback(bot, query):
         except Exception:
             lb_active = 0
         kb = [
-            [InlineKeyboardButton("📦 Cᴏᴍᴘʟᴇᴛᴇ Mᴏᴅᴇ (Oɴᴇ-Tɪᴍᴇ)", callback_data="sl#complete")],
-            [InlineKeyboardButton("📡 Lɪᴠᴇ Aᴜᴛᴏ-Bᴀᴛᴄʜ (Oɴɢᴏɪɴɢ)", callback_data="lb#main")],
-            [InlineKeyboardButton("✖️ Dɪsᴍɪss", callback_data="close_btn")]
+            [InlineKeyboardButton("Complete Mode (One-Time)", callback_data="sl#complete", style="primary")],
+            [InlineKeyboardButton("Live Auto-Batch (Ongoing)", callback_data="lb#main", style="success")],
+            [InlineKeyboardButton("Close", callback_data="close_btn", style="danger")]
         ]
         await query.message.edit_text(
-            "<b><u>Bᴀᴛᴄʜ Lɪɴᴋs Sʏsᴛᴇᴍ</u></b>\n"
+            "<b>Batch Links</b>\n"
+            "─────────────────────\n"
             f"🟢 <b>Active Tasks:</b> <code>{lb_active}</code>\n\n"
             "Choose your link generation mode:\n\n"
-            "• <b>Cᴏᴍᴘʟᴇᴛᴇ Mᴏᴅᴇ:</b> Manually select a range to immediately generate Batch Buttons for existing files.\n"
-            "• <b>Oɴɢᴏɪɴɢ Lɪᴠᴇ Bᴀᴛᴄʜ:</b> Runs infinitely in the background, bundling and posting new messages as they stream in.",
+            "• <b>Complete Mode:</b> Manually select a range to immediately generate Batch Buttons for existing files.\n"
+            "• <b>Ongoing Live Batch:</b> Runs infinitely in the background, bundling and posting new messages as they stream in.",
             reply_markup=InlineKeyboardMarkup(kb)
         )
 
@@ -1370,6 +1373,7 @@ async def _build_share_links(bot, user_id, sj, info_msg):
                         continue
                     _raw11 = (_m11.text or "0").strip()
                     sj['live_threshold'] = int(_raw11) if _raw11.isdigit() else 0
+                    sj['release_delay_sec'] = 0
                     pstep = 12
                     continue
 
@@ -2100,10 +2104,10 @@ async def _build_share_links(bot, user_id, sj, info_msg):
                 
                 if cv == 2:
                     btn2_text = apply_custom_font("Pocket FM English", cv)
-                    report_buttons_rows.append([InlineKeyboardButton(btn2_text, url="https://t.me/PocketFMEnglishSL")])
+                    report_buttons_rows.append([InlineKeyboardButton(btn2_text, url="https://t.me/Pocket_FM_EN")])
                 elif cv == 4:
                     btn2_text = "पॉकेट एफएम हिंदी"
-                    report_buttons_rows.append([InlineKeyboardButton(btn2_text, url="https://t.me/PocketFMEnglishSL")])
+                    report_buttons_rows.append([InlineKeyboardButton(btn2_text, url="https://t.me/StoriesLightX")])
                 
                 report_markup = InlineKeyboardMarkup(report_buttons_rows)
 
@@ -2246,6 +2250,8 @@ async def _build_share_links(bot, user_id, sj, info_msg):
                     "protect": True,
                     "last_seen_id": int(sj.get('end_id') or 0),
                     "buffer_mids": [],
+                    "buffer_first_seen_ts": 0,
+                    "release_delay_sec": sj.get('release_delay_sec', 0),
                     "forwarded": 0
                 }
                 await _lb_save_job(ljob)
@@ -2263,12 +2269,12 @@ async def _build_share_links(bot, user_id, sj, info_msg):
         tb = traceback.format_exc()
         logger.error(f"Share link generation error:\n{tb}")
         retry_kb = InlineKeyboardMarkup([[
-            InlineKeyboardButton("🔁 Rᴇᴛʀʏ", callback_data="sl#complete"),
-            InlineKeyboardButton("✖️ Dɪsᴍɪss", callback_data="close_btn")
+            InlineKeyboardButton("Retry", callback_data="sl#complete", style="primary"),
+            InlineKeyboardButton("Close", callback_data="close_btn", style="danger")
         ]])
         err_txt = (
-            f"<b>❌ Error during link generation:</b>\n<code>{e}</code>\n\n"
-            f"<i>Click Retry to start a new job, or Dismiss to cancel.</i>"
+            f"<b>Error during link generation:</b>\n─────────────────────\n<code>{e}</code>\n\n"
+            f"Click Retry to start a new job, or Close to cancel."
         )
         try:
             await sts.edit_text(err_txt, reply_markup=retry_kb)

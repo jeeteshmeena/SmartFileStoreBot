@@ -6,6 +6,8 @@ from pymongo import MongoClient
 
 logger = logging.getLogger(__name__)
 
+_pass_cache = {}  # In-memory TTL cache for customer listings and sales analytics
+
 async def mongodb_version():
     x = MongoClient(Config.DATABASE_URI)
     mongodb_version = x.server_info()['version']
@@ -320,10 +322,16 @@ class Database:
         )
 
     async def remove_share_bot(self, b_id: str):
-        """Removes a share bot by its string ID."""
+        """Removes a share bot by its ID (handles both string and int representation)."""
+        b_str = str(b_id)
+        pull_ids = [b_str]
+        try:
+            pull_ids.append(int(b_id))
+        except (ValueError, TypeError):
+            pass
         await self.stats.update_one(
             {'_id': 'share_bots_list'},
-            {'$pull': {'bots': {'id': str(b_id)}}}
+            {'$pull': {'bots': {'id': {'$in': pull_ids}}}}
         )
 
     async def set_share_protect_global(self, protect: bool):
@@ -379,6 +387,13 @@ class Database:
 
     async def set_share_fsub_channels(self, channels: list):
         await self._set_share_cfg(fsub_channels=channels)
+
+    # Clone Bot Link (global, displayed on delivery bot welcome screen if set)
+    async def get_share_clone_link(self) -> str:
+        return (await self._share_cfg()).get('clone_link', '') or ''
+
+    async def set_share_clone_link(self, link: str):
+        await self._set_share_cfg(clone_link=link.strip() if link else '')
 
     # Customizable Texts (global fallback)
     async def get_share_text(self, key: str, default: str = "") -> str:
@@ -613,7 +628,15 @@ class Database:
 
     # When a bot is removed, clean up its config too
     async def remove_share_bot_config(self, bot_id: str):
-        await self.share_config.delete_one({'_id': f'bot_{bot_id}'})
+        b_str = str(bot_id)
+        await self.share_config.delete_one({'_id': f'bot_{b_str}'})
+        await self.stats.delete_one({'_id': f'store_cfg_{b_str}'})
+        if hasattr(self, '_bot_cfg_cache'):
+            self._bot_cfg_cache.pop(b_str, None)
+            try:
+                self._bot_cfg_cache.pop(int(b_str), None)
+            except (ValueError, TypeError):
+                pass
 
     # ── AI Enhancer Config ──────────────────────────────────────────────────
     async def get_enhancer_config(self) -> dict:
@@ -2403,19 +2426,14 @@ class Database:
     async def get_all_pass_customers(self) -> list:
         """
         Fetch all users who hold or ever held a pass, or have pass transactions.
-        Returns sorted list of dicts:
-        {
-            'user_id': int,
-            'name': str,
-            'active': bool,
-            'expires_at': float,
-            'days_left': float,
-            'time_left_str': str,
-            'updated_at': float
-        }
+        Uses 15s in-memory cache to ensure instant loading.
         """
         import time
         now = time.time()
+        global _pass_cache
+        if _pass_cache.get('customers') is not None and (now - _pass_cache.get('customers_ts', 0)) < 15:
+            return _pass_cache['customers']
+
         users_map = {}
 
         # 1. Check unlimited_passes
@@ -2435,8 +2453,8 @@ class Database:
                 'updated_at': float(doc.get('updated_at', exp))
             }
 
-        # 2. Check used_utrs
-        async for doc in self.used_utrs.find({}):
+        # 2. Check used_utrs (projection)
+        async for doc in self.used_utrs.find({}, {'_id': 0, 'user_id': 1, 'user_name': 1, 'tier': 1, 'used_at': 1}):
             uid = doc.get('user_id')
             if not uid:
                 continue
@@ -2454,8 +2472,8 @@ class Database:
             elif not users_map[uid]['name'] and u_name:
                 users_map[uid]['name'] = u_name
 
-        # 3. Check pass_orders
-        async for doc in self.pass_orders.find({'status': 'PAID'}):
+        # 3. Check pass_orders (projection)
+        async for doc in self.pass_orders.find({'status': 'PAID'}, {'_id': 0, 'user_id': 1, 'user_name': 1, 'customer_name': 1, 'tier': 1, 'paid_at': 1, 'created_at': 1}):
             uid = doc.get('user_id')
             if not uid:
                 continue
@@ -2473,7 +2491,6 @@ class Database:
             else:
                 if not users_map[uid]['name'] and u_name:
                     users_map[uid]['name'] = u_name
-                # Promote tier if pass order has pro or premium
                 TIER_RANKS = {'basic': 1, 'pro': 2, 'premium': 3}
                 cur_t = users_map[uid].get('tier', 'basic')
                 if TIER_RANKS.get(tier, 1) > TIER_RANKS.get(cur_t, 1):
@@ -2483,7 +2500,7 @@ class Database:
         all_uids = list(users_map.keys())
         if all_uids:
             try:
-                cursor = self.col.find({'id': {'$in': all_uids}}, {'id': 1, 'name': 1})
+                cursor = self.col.find({'id': {'$in': all_uids}}, {'_id': 0, 'id': 1, 'name': 1})
                 async for udoc in cursor:
                     u_id = udoc.get('id')
                     tg_name = udoc.get('name')
@@ -2523,76 +2540,63 @@ class Database:
 
         # Sort: active first (descending by expires_at), then expired (descending by expires_at / updated_at)
         results.sort(key=lambda x: (1 if x['active'] else 0, x['expires_at'], x['updated_at']), reverse=True)
+        _pass_cache['customers'] = results
+        _pass_cache['customers_ts'] = now
         return results
 
     async def get_pass_sales_analytics(self) -> dict:
         """
-        Calculates pass subscription sales and revenue analytics in Indian Standard Time (IST):
+        Calculates pass subscription sales and revenue analytics in IST (UTC+5:30):
         - total_sales: total number of paid pass orders
         - total_revenue: sum of amount for paid orders (INR)
-        - today_sales: number of paid pass orders today (since 00:00:00 midnight IST)
-        - today_revenue: sum of amount for paid orders today (since 00:00:00 midnight IST)
-        - last24h_sales: number of paid pass orders in the rolling last 24 hours
-        - last24h_revenue: sum of amount for paid orders in the rolling last 24 hours
+        - today_sales: number of paid pass orders today from 00:00:00 IST
+        - today_revenue: sum of amount for paid orders today from 00:00:00 IST
+        - sales_24h: number of paid pass orders in rolling 24 hours
+        - revenue_24h: sum of amount for paid orders in rolling 24 hours
         - basic_sales: count of basic tier passes sold
         - pro_sales: count of pro tier passes sold
         - prem_sales: count of premium tier passes sold
         - gateway_stats: dict of {gateway_name: count}
         """
-        import datetime
         import time
-        now_ts = time.time()
+        import datetime
+        now = time.time()
+        global _pass_cache
+        if _pass_cache.get('analytics') is not None and (now - _pass_cache.get('analytics_ts', 0)) < 15:
+            return _pass_cache['analytics']
 
-        # Exact IST Midnight Calculation using standard library timezone (UTC+5:30)
         IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
         now_ist = datetime.datetime.now(IST)
-        midnight_ist_dt = now_ist.replace(hour=0, minute=0, second=0, microsecond=0)
-        midnight_ist = midnight_ist_dt.timestamp()
-        last_24h_ts = now_ts - 86400.0
+        midnight_ist = now_ist.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+        cutoff_24h = now - 86400
 
         total_sales = 0
         total_revenue = 0.0
         today_sales = 0
         today_revenue = 0.0
-        last24h_sales = 0
-        last24h_revenue = 0.0
+        sales_24h = 0
+        revenue_24h = 0.0
         basic_sales = 0
         pro_sales = 0
         prem_sales = 0
         gateway_stats = {}
 
-        def _to_timestamp(val) -> float:
-            if val is None:
-                return 0.0
-            if isinstance(val, (int, float)):
-                return float(val)
-            if isinstance(val, datetime.datetime):
-                if val.tzinfo is None:
-                    return val.replace(tzinfo=datetime.timezone.utc).timestamp()
-                return val.timestamp()
-            try:
-                return float(val)
-            except (ValueError, TypeError):
-                return 0.0
-
         try:
-            cursor = self.pass_orders.find({'status': 'PAID'})
+            cursor = self.pass_orders.find({'status': 'PAID'}, {
+                '_id': 0, 'amount': 1, 'paid_at': 1, 'created_at': 1, 'tier': 1, 'gateway': 1
+            })
             async for doc in cursor:
                 total_sales += 1
-                try:
-                    amt = float(doc.get('amount') or 0.0)
-                except Exception:
-                    amt = 0.0
+                amt = float(doc.get('amount') or 0.0)
                 total_revenue += amt
 
-                ts = _to_timestamp(doc.get('paid_at') or doc.get('created_at'))
+                ts = float(doc.get('paid_at') or doc.get('created_at') or 0.0)
                 if ts >= midnight_ist:
                     today_sales += 1
                     today_revenue += amt
-
-                if ts >= last_24h_ts:
-                    last24h_sales += 1
-                    last24h_revenue += amt
+                if ts >= cutoff_24h:
+                    sales_24h += 1
+                    revenue_24h += amt
 
                 tier = str(doc.get('tier') or 'basic').lower().strip()
                 if tier == 'pro':
@@ -2620,18 +2624,21 @@ class Database:
             import logging
             logging.getLogger(__name__).error(f"[Database] Error in get_pass_sales_analytics: {e}")
 
-        return {
+        res = {
             'total_sales': total_sales,
             'total_revenue': total_revenue,
             'today_sales': today_sales,
             'today_revenue': today_revenue,
-            'last24h_sales': last24h_sales,
-            'last24h_revenue': last24h_revenue,
+            'sales_24h': sales_24h,
+            'revenue_24h': revenue_24h,
             'basic_sales': basic_sales,
             'pro_sales': pro_sales,
             'prem_sales': prem_sales,
             'gateway_stats': gateway_stats
         }
+        _pass_cache['analytics'] = res
+        _pass_cache['analytics_ts'] = now
+        return res
 
     async def get_customer_full_details(self, user_id: int) -> dict:
         """Fetch customer profile, pass status, joined date, first buy date, language, and full transaction history."""
@@ -2763,6 +2770,18 @@ class Database:
         except Exception: pass
         try:
             await self.pass_orders.create_index("order_id", unique=True, background=True)
+        except Exception: pass
+        try:
+            await self.pass_orders.create_index([("status", 1), ("created_at", -1)], background=True)
+        except Exception: pass
+        try:
+            await self.pass_orders.create_index([("user_id", 1), ("created_at", -1)], background=True)
+        except Exception: pass
+        try:
+            await self.used_utrs.create_index("utr", background=True)
+        except Exception: pass
+        try:
+            await self.used_utrs.create_index("user_id", background=True)
         except Exception: pass
 
         # Self-migration routine: migrate old seen_users_* and bot_* configs to the new share_users collection

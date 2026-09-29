@@ -43,6 +43,52 @@ async def _ask(bot, user_id: int, timeout: int = 300):
 
 from pyrogram import ContinuePropagation
 
+async def _notify_pass_activation(target_uid: int, cust_msg: str, bot):
+    """Sends pass activation message in background without blocking admin UI."""
+    try:
+        from plugins.share_bot import share_clients
+        if share_clients:
+            for s_client in list(share_clients.values()):
+                try:
+                    await asyncio.wait_for(s_client.send_message(chat_id=target_uid, text=cust_msg), timeout=4.0)
+                    return
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    try:
+        await asyncio.wait_for(bot.send_message(chat_id=target_uid, text=cust_msg), timeout=4.0)
+    except Exception:
+        pass
+
+async def _notify_order_customer(user_id: int, message_text: str, target_bot_id: str = "", main_bot = None) -> bool:
+    """Send order notification to user via Delivery Bot, falling back to other delivery bots or main bot."""
+    target_id_str = str(target_bot_id or '').strip()
+    try:
+        from plugins.share_bot import share_clients
+        if target_id_str and target_id_str in share_clients:
+            try:
+                await asyncio.wait_for(share_clients[target_id_str].send_message(user_id, message_text), timeout=5.0)
+                return True
+            except Exception:
+                pass
+        if share_clients:
+            for s_cli in list(share_clients.values()):
+                try:
+                    await asyncio.wait_for(s_cli.send_message(user_id, message_text), timeout=5.0)
+                    return True
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    if main_bot:
+        try:
+            await asyncio.wait_for(main_bot.send_message(user_id, message_text), timeout=5.0)
+            return True
+        except Exception:
+            pass
+    return False
+
 def _clean_emoji(text: str) -> str:
     if not text:
         return ""
@@ -570,6 +616,9 @@ async def owners_cb(bot, query):
 @Client.on_callback_query(filters.regex(r'^settings#(?!lang$|cleanmsg$|enhancer$|enh#|protected|owners|prot_|owner_|limits_)'))
 async def settings_query(bot, query):
   import os
+  import asyncio
+  import time
+  import datetime
   from config import Config
   try:
       await query.answer()
@@ -1043,21 +1092,27 @@ async def settings_query(bot, query):
      rl_win_str = format_duration_friendly(rl_win_sec)
      rl_lbl = f"»  ON ({rl_max} in {rl_win_str})" if rl_on else "‣  OFF"
 
+     clone_link = await db.get_share_clone_link()
+     clone_lbl = "»  Set" if clone_link else "‣  None Set"
+     prot_style = "success" if protect else "danger"
+
      buttons = []
-     buttons.append([InlineKeyboardButton(f"Protection - {'ON' if protect else 'OFF'}", callback_data="settings#sharebotprotect")])
-     buttons.append([InlineKeyboardButton("Logs", callback_data="settings#sb_logs_channel")])
-     buttons.append([InlineKeyboardButton("Anti Abuse", callback_data="settings#sb_anti_abuse")])
-     buttons.append([InlineKeyboardButton("Rate Limit & Pass", callback_data="settings#sb_ratelimit")])
-     buttons.append([InlineKeyboardButton("• Shorteners •", callback_data="settings#shorteners")])
-     buttons.append([InlineKeyboardButton("──── Delivery Bots ────", callback_data="settings#noop")])
+     buttons.append([InlineKeyboardButton(f"Protection - {'ON' if protect else 'OFF'}", callback_data="settings#sharebotprotect", style=prot_style)])
+     buttons.append([InlineKeyboardButton("Logs", callback_data="settings#sb_logs_channel", style="primary")])
+     buttons.append([InlineKeyboardButton("Anti Abuse", callback_data="settings#sb_anti_abuse", style="primary")])
+     buttons.append([InlineKeyboardButton("Rate Limit & Pass", callback_data="settings#sb_ratelimit", style="primary")])
+     buttons.append([InlineKeyboardButton(f"Clone Bot Link ({clone_lbl})", callback_data="settings#sb_clone_link", style="primary")])
+     buttons.append([InlineKeyboardButton("• Shorteners •", callback_data="settings#shorteners", style="primary")])
+     buttons.append([InlineKeyboardButton("──── Delivery Bots ────", callback_data="settings#noop", style="primary")])
 
      api_buttons = [
-         [{"text": f"Protection - {'ON' if protect else 'OFF'}", "callback_data": "settings#sharebotprotect", "icon_custom_emoji_id": "5778570255555105942"}],
-         [{"text": "Logs", "callback_data": "settings#sb_logs_channel", "icon_custom_emoji_id": "5920046907782074235"}],
-         [{"text": "Anti Abuse", "callback_data": "settings#sb_anti_abuse", "icon_custom_emoji_id": "5893192487324880883"}],
-         [{"text": "Rate Limit & Pass", "callback_data": "settings#sb_ratelimit", "icon_custom_emoji_id": "5258113901106580375"}],
-         [{"text": "• Shorteners •", "callback_data": "settings#shorteners"}],
-         [{"text": "──── Delivery Bots ────", "callback_data": "settings#noop"}],
+         [{"text": f"Protection - {'ON' if protect else 'OFF'}", "callback_data": "settings#sharebotprotect", "icon_custom_emoji_id": "5778570255555105942", "style": prot_style}],
+         [{"text": "Logs", "callback_data": "settings#sb_logs_channel", "icon_custom_emoji_id": "5920046907782074235", "style": "primary"}],
+         [{"text": "Anti Abuse", "callback_data": "settings#sb_anti_abuse", "icon_custom_emoji_id": "5893192487324880883", "style": "primary"}],
+         [{"text": "Rate Limit & Pass", "callback_data": "settings#sb_ratelimit", "icon_custom_emoji_id": "5258113901106580375", "style": "primary"}],
+         [{"text": f"Clone Bot Link ({clone_lbl})", "callback_data": "settings#sb_clone_link", "icon_custom_emoji_id": "6037622221625626773", "style": "primary"}],
+         [{"text": "• Shorteners •", "callback_data": "settings#shorteners", "style": "primary"}],
+         [{"text": "──── Delivery Bots ────", "callback_data": "settings#noop", "style": "primary"}],
      ]
 
      i = 0
@@ -1069,25 +1124,25 @@ async def settings_query(bot, query):
              name2 = str(b2.get('name', 'Bot')).strip()
              if len(name1) <= 7 and len(name2) <= 7:
                  buttons.append([
-                     InlineKeyboardButton(name1, callback_data=f"settings#sb_view_{b1['id']}"),
-                     InlineKeyboardButton(name2, callback_data=f"settings#sb_view_{b2['id']}")
+                     InlineKeyboardButton(name1, callback_data=f"settings#sb_view_{b1['id']}", style="primary"),
+                     InlineKeyboardButton(name2, callback_data=f"settings#sb_view_{b2['id']}", style="primary")
                  ])
                  api_buttons.append([
-                     {"text": name1, "callback_data": f"settings#sb_view_{b1['id']}"},
-                     {"text": name2, "callback_data": f"settings#sb_view_{b2['id']}"}
+                     {"text": name1, "callback_data": f"settings#sb_view_{b1['id']}", "style": "primary"},
+                     {"text": name2, "callback_data": f"settings#sb_view_{b2['id']}", "style": "primary"}
                  ])
                  i += 2
                  continue
-         buttons.append([InlineKeyboardButton(name1, callback_data=f"settings#sb_view_{b1['id']}")])
-         api_buttons.append([{"text": name1, "callback_data": f"settings#sb_view_{b1['id']}"}])
+         buttons.append([InlineKeyboardButton(name1, callback_data=f"settings#sb_view_{b1['id']}", style="primary")])
+         api_buttons.append([{"text": name1, "callback_data": f"settings#sb_view_{b1['id']}", "style": "primary"}])
          i += 1
 
      if len(bots) < 10:
-         buttons.append([InlineKeyboardButton("Add Share Bot", callback_data="settings#sb_add")])
-         api_buttons.append([{"text": "Add Share Bot", "callback_data": "settings#sb_add", "icon_custom_emoji_id": "5807642902066634351"}])
+         buttons.append([InlineKeyboardButton("Add Share Bot", callback_data="settings#sb_add", style="success")])
+         api_buttons.append([{"text": "Add Share Bot", "callback_data": "settings#sb_add", "icon_custom_emoji_id": "5807642902066634351", "style": "success"}])
 
-     buttons.append([InlineKeyboardButton('Back', callback_data="settings#main")])
-     api_buttons.append([{"text": "Back", "callback_data": "settings#main"}])
+     buttons.append([InlineKeyboardButton('← Back', callback_data="settings#main", style="danger")])
+     api_buttons.append([{"text": "← Back", "callback_data": "settings#main", "style": "danger"}])
 
      text = (
          f'<emoji id="6037622221625626773">🤖</emoji> <b>Share Bot Config</b>\n'
@@ -3369,6 +3424,166 @@ async def settings_query(bot, query):
       )
 
       await _send_or_edit_fast(query, text, buttons, api_buttons=api_buttons, bot=bot)
+
+  elif type.startswith("sb_remove_") and not type.startswith("sb_remove_confirm_"):
+      b_id = type.split("sb_remove_")[1]
+      bots = await db.get_share_bots()
+      bt = next((x for x in bots if str(x.get('id', '')) == str(b_id)), None)
+      b_name = bt.get('name', 'Unknown') if bt else f"ID {b_id}"
+      b_user = bt.get('username', 'N/A') if bt else "N/A"
+
+      text = (
+          f'<emoji id="6030400221232501136">⚠️</emoji> <b>Confirm Bot Removal</b>\n'
+          f"────────────────────\n"
+          f'<emoji id="6030400221232501136">👤</emoji> <b>Name:-</b> {b_name}\n'
+          f'<emoji id="6021683099773966917">🌐</emoji> <b>Username:-</b> @{b_user}\n'
+          f'<emoji id="5332423642850536254">🆔</emoji> <b>ID:-</b> <code>{b_id}</code>\n'
+          f"────────────────────\n"
+          f"<b>Are you sure you want to remove this delivery bot?</b>\n"
+          f"<i>This will safely stop the bot and delete its configurations.</i>"
+      )
+
+      buttons = [
+          [InlineKeyboardButton('❌ Yes, Remove Bot', callback_data=f"settings#sb_remove_confirm_{b_id}")],
+          [InlineKeyboardButton('Back', callback_data=f"settings#sb_view_{b_id}")],
+      ]
+      api_buttons = [
+          [{"text": "Yes, Remove Bot", "callback_data": f"settings#sb_remove_confirm_{b_id}", "icon_custom_emoji_id": "6030400221232501136", "style": "danger"}],
+          [{"text": "Back", "callback_data": f"settings#sb_view_{b_id}"}],
+      ]
+
+      from plugins.share_bot import send_or_edit_with_custom_icons
+      sent_ok = await send_or_edit_with_custom_icons(
+          client=bot,
+          chat_id=query.message.chat.id,
+          text=text,
+          inline_keyboard=api_buttons,
+          message_id=query.message.id
+      )
+      if not sent_ok:
+          try:
+              await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
+          except Exception:
+              pass
+
+  elif type.startswith("sb_remove_confirm_"):
+      b_id = type.split("sb_remove_confirm_")[1]
+
+      # 1. Stop active client and remove from memory
+      from plugins.share_bot import share_clients, _share_bot_token_cache
+      sc = share_clients.pop(str(b_id), None)
+      if not sc:
+          try:
+              sc = share_clients.pop(int(b_id), None)
+          except (ValueError, TypeError):
+              pass
+      if sc:
+          try:
+              await sc.stop()
+          except Exception as e:
+              logger.warning(f"Error stopping share client {b_id}: {e}")
+
+      _share_bot_token_cache.pop(str(b_id), None)
+      try:
+          _share_bot_token_cache.pop(int(b_id), None)
+      except (ValueError, TypeError):
+          pass
+
+      # 2. Clean up session files on disk
+      try:
+          import glob
+          import os
+          for fpath in glob.glob(f"sessions/share_bot_{b_id}_*"):
+              try:
+                  os.remove(fpath)
+              except Exception:
+                  pass
+      except Exception:
+          pass
+
+      # 3. Remove from database
+      await db.remove_share_bot(b_id)
+      await db.remove_share_bot_config(b_id)
+      try:
+          await db.clear_all_deliveries(b_id)
+      except Exception:
+          pass
+
+      logger.info(f"Delivery bot {b_id} successfully removed.")
+      await query.answer("✅ Bot removed successfully!", show_alert=True)
+      query.data = "settings#sharebot"
+      return await settings_query(bot, query)
+
+  elif type == "sb_clone_link":
+      clone_link = await db.get_share_clone_link()
+      status_txt = f"<code>{clone_link}</code>" if clone_link else "<i>Not Set</i>"
+      txt = (
+          "🤖 <b><u>Cʟᴏɴᴇ Bᴏᴛ Lɪɴᴋ Sᴇᴛᴜᴘ</u></b>\n\n"
+          f"Current Link: {status_txt}\n\n"
+          "When a link is configured, a <b>'Create My own clone'</b> button will appear at the bottom of the Delivery Bot main menu.\n"
+          "If no link is configured, the button is hidden automatically.\n\n"
+          "Choose an option below to set or remove the link:"
+      )
+      btns = [
+          [InlineKeyboardButton("✏️ Set / Change Link", callback_data="settings#sb_set_clone_link")],
+      ]
+      api_btns = [
+          [{"text": "✏️ Set / Change Link", "callback_data": "settings#sb_set_clone_link", "icon_custom_emoji_id": "6021625933759257863"}],
+      ]
+      if clone_link:
+          btns.append([InlineKeyboardButton("🗑️ Remove Link", callback_data="settings#sb_rm_clone_link")])
+          api_btns.append([{"text": "🗑️ Remove Link", "callback_data": "settings#sb_rm_clone_link", "icon_custom_emoji_id": "5970055887774028039"}])
+      btns.append([InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="settings#sharebot")])
+      api_btns.append([{"text": "❮ Bᴀᴄᴋ", "callback_data": "settings#sharebot"}])
+
+      from plugins.share_bot import send_or_edit_with_custom_icons
+      sent_ok = await send_or_edit_with_custom_icons(
+          client=bot,
+          chat_id=query.message.chat.id,
+          text=txt,
+          inline_keyboard=api_btns,
+          message_id=query.message.id
+      )
+      if not sent_ok:
+          try:
+              await query.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(btns))
+          except Exception:
+              pass
+
+  elif type == "sb_rm_clone_link":
+      await db.set_share_clone_link("")
+      try:
+          await query.answer("✅ Clone Bot Link removed!", show_alert=True)
+      except Exception:
+          pass
+      query.data = "settings#sb_clone_link"
+      return await settings_query(bot, query)
+
+  elif type == "sb_set_clone_link":
+      await query.answer()
+      uid = query.from_user.id
+      try:
+          ask_msg = await bot.ask(
+              uid,
+              "🤖 <b><u>Sᴇᴛ Cʟᴏɴᴇ Bᴏᴛ Lɪɴᴋ</u></b>\n\n"
+              "Please send the Telegram bot link or URL (e.g. <code>https://t.me/YourBot</code> or <code>https://t.me/AryaBot?start=clone</code>).\n\n"
+              "<i>Send ⛔ to cancel or /remove to clear the link.</i>",
+              timeout=120
+          )
+          ans = (ask_msg.text or "").strip()
+          if not ans or "⛔" in ans or ans.lower() in ("cancel", "/cancel"):
+              await bot.send_message(uid, "<i>Cancelled.</i>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="settings#sb_clone_link")]]))
+          elif ans.lower() in ("/remove", "remove", "delete", "/delete", "none"):
+              await db.set_share_clone_link("")
+              await bot.send_message(uid, "✅ <b>Clone Bot Link removed!</b>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="settings#sb_clone_link")]]))
+          else:
+              link = ans
+              if not (link.startswith("http://") or link.startswith("https://") or link.startswith("t.me/")):
+                  link = "https://" + link
+              await db.set_share_clone_link(link)
+              await bot.send_message(uid, f"✅ <b>Clone Bot Link saved!</b>\n\nLink: <code>{link}</code>\n\nThe <b>'Create My own clone'</b> button is now active on the Delivery Bot main menu.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="settings#sb_clone_link")]]))
+      except asyncio.TimeoutError:
+          await bot.send_message(uid, "<i>⏱ Timed out.</i>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="settings#sb_clone_link")]]))
 
   elif type.startswith("sb_toggle_mode_"):
       b_id = type.split("sb_toggle_mode_")[1]
@@ -6679,28 +6894,8 @@ async def admin_pass_approval_callback(bot, query):
             f'• <emoji id="5411359377904934337">🟢</emoji> <b>Status:</b> Unlimited Access (No Cooldown)\n\n'
             f"You can now download all stories and batch files without any cooldown or limits. Enjoy!"
         )
-        target_bot_id = str(order.get('bot_id') or '')
-        notified = False
-        try:
-            from plugins.share_bot import share_clients
-            if target_bot_id and target_bot_id in share_clients:
-                await share_clients[target_bot_id].send_message(user_id, user_msg)
-                notified = True
-            elif share_clients:
-                for s_cli in share_clients.values():
-                    try:
-                        await s_cli.send_message(user_id, user_msg)
-                        notified = True
-                        break
-                    except Exception:
-                        pass
-        except Exception:
-            pass
-        if not notified:
-            try:
-                await bot.send_message(user_id, user_msg)
-            except Exception:
-                pass
+        target_bot_id = str(order.get('bot_id') or '').strip()
+        await _notify_order_customer(user_id, user_msg, target_bot_id=target_bot_id, main_bot=bot)
 
         # Dispatch log with checkout_version and tier
         rl_cfg = await db.get_delivery_rate_limit_config()
@@ -6750,27 +6945,7 @@ async def admin_pass_approval_callback(bot, query):
             f"<i>Reason: Invalid or unreadable payment proof.</i>\n\n"
             f"If money was deducted from your bank, please retry or contact our support team with transaction details."
         )
-        dec_notified = False
-        try:
-            from plugins.share_bot import share_clients
-            if target_bot_id and target_bot_id in share_clients:
-                await share_clients[target_bot_id].send_message(user_id, decline_user_msg)
-                dec_notified = True
-            elif share_clients:
-                for s_cli in share_clients.values():
-                    try:
-                        await s_cli.send_message(user_id, decline_user_msg)
-                        dec_notified = True
-                        break
-                    except Exception:
-                        pass
-        except Exception:
-            pass
-        if not dec_notified:
-            try:
-                await bot.send_message(user_id, decline_user_msg)
-            except Exception:
-                pass
+        await _notify_order_customer(user_id, decline_user_msg, target_bot_id=target_bot_id, main_bot=bot)
 
         await query.answer("❌ Payment screenshot rejected and user notified.", show_alert=True)
         orig_caption = query.message.caption or query.message.text or ""

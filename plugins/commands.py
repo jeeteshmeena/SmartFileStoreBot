@@ -910,5 +910,198 @@ async def cmd_pass_status(client, message):
     )
 
 
+# ── Channel Management Commands ───────────────────────────────────────────────
+@Client.on_message(filters.command(["addchannel", "addchannels", "addchat", "addchats"]) & filters.private)
+async def cmd_add_channel(client, message):
+    """Add one or multiple channels by ID, link, or username."""
+    user_id = message.from_user.id
+    raw_args = message.text.split(None, 1)
+    if len(raw_args) < 2:
+        return await message.reply_text(
+            '<emoji id="5882207227997066107">➕</emoji> <b>Add Channel(s)</b>\n\n'
+            "<b>Usage:</b> <code>/addchannel &lt;chat_id_1&gt; [chat_id_2] ...</code>\n\n"
+            "<b>Examples:</b>\n"
+            "• Single ID: <code>/addchannel -1001234567890</code>\n"
+            "• Multiple IDs: <code>/addchannel -1001234567890 -1009876543210</code>\n"
+            "• Link / Username: <code>/addchannel @mychannel https://t.me/anotherchannel</code>\n\n"
+            "<i>Tip: You can pass multiple IDs separated by spaces, commas, or newlines. Ensure this bot is an admin in the channel(s) first.</i>"
+        )
+
+    import re, asyncio
+    # Extract all possible tokens (IDs, links, usernames)
+    tokens = re.findall(r'(?:https?://t\.me/(?:c/)?[\w\+]+|-?\d{5,16}|@[\w_]{4,32})', raw_args[1])
+    if not tokens:
+        tokens = [t.strip(' ,;') for t in raw_args[1].split() if t.strip(' ,;')]
+
+    if not tokens:
+        return await message.reply_text("❌ No valid channel IDs, usernames, or links found in your command.")
+
+    existing_chs = await db.get_user_channels(user_id)
+    cur_count = len(existing_chs)
+    MAX_CHANNELS = 250
+
+    added = []
+    already_exists = []
+    failed = []
+
+    progress_msg = await message.reply_text(f"⏳ Processing {len(tokens)} channel(s)...")
+
+    for token in tokens:
+        if cur_count >= MAX_CHANNELS:
+            failed.append((token, "Limit reached (max 250)"))
+            continue
+
+        raw_txt = token.strip()
+        chat_id = None
+        title = "Unknown Chat"
+        username = "private"
+
+        if raw_txt.lstrip('-').isdigit():
+            chat_id = int(raw_txt)
+        elif "t.me/c/" in raw_txt:
+            m = re.search(r't\.me/c/(\d+)', raw_txt)
+            if m:
+                chat_id = int("-100" + m.group(1))
+        elif "t.me/" in raw_txt:
+            m = re.search(r't\.me/([^/\?#]+)', raw_txt.replace('https://', '').replace('http://', ''))
+            if m and m.group(1) not in ['joinchat', '+', 'c']:
+                chat_id = m.group(1)
+                username = "@" + m.group(1)
+        elif raw_txt.startswith('@'):
+            chat_id = raw_txt
+            username = raw_txt
+
+        if not chat_id:
+            failed.append((token, "Invalid ID / Link"))
+            continue
+
+        # Try to resolve chat via Telegram bot with timeout
+        resolved_id = chat_id
+        try:
+            chat_info = await asyncio.wait_for(client.get_chat(chat_id), timeout=3.0)
+            resolved_id = chat_info.id
+            title = chat_info.title or title
+            username = ("@" + chat_info.username) if getattr(chat_info, 'username', None) else username
+        except Exception:
+            # If get_chat failed, keep numeric ID if numeric
+            if isinstance(chat_id, int):
+                resolved_id = chat_id
+                title = f"Channel {chat_id}"
+            else:
+                failed.append((token, "Bot is not admin or peer invalid"))
+                continue
+
+        # Check if already added
+        if await db.in_channel(user_id, resolved_id):
+            already_exists.append((resolved_id, title))
+            continue
+
+        res = await db.add_channel(user_id, resolved_id, title, username)
+        if res:
+            added.append((resolved_id, title))
+            cur_count += 1
+        else:
+            already_exists.append((resolved_id, title))
+
+    # Build output summary
+    lines = ['<emoji id="5882207227997066107">📢</emoji> <b>Channel Add Results:</b>\n']
+    if added:
+        lines.append(f'<b>✅ Added ({len(added)}):</b>')
+        for cid, ttl in added:
+            lines.append(f'• <b>{ttl}</b> (<code>{cid}</code>)')
+        lines.append('')
+    if already_exists:
+        lines.append(f'<b>⚠️ Already Existed ({len(already_exists)}):</b>')
+        for cid, ttl in already_exists:
+            lines.append(f'• <b>{ttl}</b> (<code>{cid}</code>)')
+        lines.append('')
+    if failed:
+        lines.append(f'<b>❌ Failed ({len(failed)}):</b>')
+        for tok, rsn in failed:
+            lines.append(f'• <code>{tok}</code>: <i>{rsn}</i>')
+        lines.append('')
+
+    lines.append(f'<b>Total Saved Channels:</b> <code>{cur_count}/250</code>')
+    res_text = "\n".join(lines).strip()
+    try:
+        await progress_msg.edit_text(res_text)
+    except Exception:
+        await message.reply_text(res_text)
+
+
+@Client.on_message(filters.command(["delchannel", "delchannels", "remchannel", "rmchannel", "removechannel", "delchat"]) & filters.private)
+async def cmd_del_channel(client, message):
+    """Remove one or multiple channels by numerical ID."""
+    user_id = message.from_user.id
+    raw_args = message.text.split(None, 1)
+    if len(raw_args) < 2:
+        return await message.reply_text(
+            '<emoji id="5774077015388852135">🗑</emoji> <b>Delete / Remove Channel(s)</b>\n\n'
+            "<b>Usage:</b> <code>/delchannel &lt;chat_id_1&gt; [chat_id_2] ...</code>\n\n"
+            "<b>Examples:</b>\n"
+            "• Single: <code>/delchannel -1001234567890</code>\n"
+            "• Multiple: <code>/delchannel -1001234567890 -1009876543210</code>\n\n"
+            "<i>Tip: You can pass multiple IDs separated by spaces, commas, or newlines.</i>"
+        )
+
+    import re
+    # Extract IDs / numbers
+    tokens = re.findall(r'-?\d{5,16}', raw_args[1])
+    if not tokens:
+        tokens = [t.strip(' ,;') for t in raw_args[1].split() if t.strip(' ,;')]
+
+    if not tokens:
+        return await message.reply_text("❌ No valid channel IDs found in your command.")
+
+    deleted = []
+    not_found = []
+    invalid = []
+
+    progress_msg = await message.reply_text(f"⏳ Removing {len(tokens)} channel(s)...")
+
+    for token in tokens:
+        cid_int = None
+        if token.lstrip('-').isdigit():
+            cid_int = int(token)
+        else:
+            invalid.append(token)
+            continue
+
+        ex_ch = await db.get_channel_details(user_id, cid_int)
+        ch_title = ex_ch.get('title', f"Channel {cid_int}") if ex_ch else f"{cid_int}"
+
+        res = await db.remove_channel(user_id, cid_int)
+        if res and getattr(res, 'deleted_count', 0) > 0:
+            deleted.append((cid_int, ch_title))
+        else:
+            not_found.append((cid_int, ch_title))
+
+    remaining = await db.get_user_channels(user_id)
+
+    lines = ['<emoji id="5774077015388852135">🗑</emoji> <b>Channel Removal Results:</b>\n']
+    if deleted:
+        lines.append(f'<b>✅ Removed ({len(deleted)}):</b>')
+        for cid, ttl in deleted:
+            lines.append(f'• <b>{ttl}</b> (<code>{cid}</code>)')
+        lines.append('')
+    if not_found:
+        lines.append(f'<b>⚠️ Not Found in Your List ({len(not_found)}):</b>')
+        for cid, ttl in not_found:
+            lines.append(f'• <code>{cid}</code>')
+        lines.append('')
+    if invalid:
+        lines.append(f'<b>❌ Invalid Format ({len(invalid)}):</b>')
+        for inv in invalid:
+            lines.append(f'• <code>{inv}</code>')
+        lines.append('')
+
+    lines.append(f'<b>Remaining Channels:</b> <code>{len(remaining)}/250</code>')
+    res_text = "\n".join(lines).strip()
+    try:
+        await progress_msg.edit_text(res_text)
+    except Exception:
+        await message.reply_text(res_text)
+
+
 
 

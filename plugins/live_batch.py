@@ -21,7 +21,9 @@ from pyrogram.errors import FloodWait
 from database import db
 from bot import BOT_INSTANCE
 from plugins.test import CLIENT
-from plugins.utils import extract_ep_label_robust, format_tg_error, _passes_filters
+from plugins.utils import extract_ep_label_robust, format_tg_error
+# _passes_filters from utils
+from plugins.utils import _passes_filters
 _CLIENT = CLIENT()
 COLL = "live_batch_jobs"
 
@@ -197,7 +199,8 @@ async def _post_live_batch(sb_client, job: dict, chunk_msgs: list):
             
         buttons_per_post = int(job.get("buttons_per_post", 10))
         merge_size = int(job.get("merge_size", 10))
-        all_buttons = job.get("all_buttons", [])
+        old_buttons = [dict(b) for b in job.get("all_buttons", [])]
+        all_buttons = [dict(b) for b in job.get("all_buttons", [])]
         prev_total = len(all_buttons)
         
         all_buttons.extend(raw_buttons)
@@ -280,8 +283,7 @@ async def _post_live_batch(sb_client, job: dict, chunk_msgs: list):
         for i in range(0, len(all_buttons), buttons_per_post):
             blocks.append(all_buttons[i : i + buttons_per_post])
             
-        # Find the first changed button index by comparing new and old button states
-        old_buttons = job.get("all_buttons", [])
+        # Find the first changed button index by comparing new and old button states (old_buttons was snapshotted before adding new media buttons)
         changed_btn_idx = len(old_buttons)
         for idx_btn in range(max(len(old_buttons), len(all_buttons))):
             if idx_btn >= len(old_buttons) or idx_btn >= len(all_buttons):
@@ -447,6 +449,17 @@ async def _post_live_batch(sb_client, job: dict, chunk_msgs: list):
         return False
 
 async def _lb_run_job(job_id: str):
+    cur_task = asyncio.current_task()
+    old_task = _lb_tasks.get(job_id)
+    if old_task and old_task is not cur_task and not old_task.done():
+        logger.warning(f"[LiveBatch {job_id}] Found existing running task {old_task}. Cancelling to prevent duplicate runner.")
+        old_task.cancel()
+        try:
+            await asyncio.wait_for(asyncio.shield(old_task), timeout=3)
+        except Exception:
+            pass
+
+    _lb_tasks[job_id] = cur_task
     logger.info(f"Starting Live Batch job {job_id}")
     src_client = None
     ub_sess = None
@@ -458,8 +471,21 @@ async def _lb_run_job(job_id: str):
         logger.error(f"[LiveBatch {job_id}] Import error on startup: {import_err}")
         return
 
+    # Load previously posted source mids for this job to prevent ANY duplicate re-posting
+    try:
+        posted_mids_doc = await db.db["live_batch_posted_mids"].find_one({"job_id": job_id})
+        posted_source_ids = set(posted_mids_doc.get("mids", [])) if posted_mids_doc else set()
+    except Exception as _pme:
+        logger.debug(f"[LiveBatch {job_id}] Could not load posted mids: {_pme}")
+        posted_source_ids = set()
+
     try:
         while True:
+            # Concurrency check: If another task took over, stop this superseded task immediately
+            if _lb_tasks.get(job_id) is not cur_task:
+                logger.warning(f"[LiveBatch {job_id}] Runner task superseded by newer task. Exiting cleanly.")
+                break
+
             try:
                 ev = _lb_paused.get(job_id)
                 if ev and not ev.is_set():
@@ -471,7 +497,19 @@ async def _lb_run_job(job_id: str):
                 continue
 
             if not job or job.get("status") in ("stopped", "failed"):
+                logger.info(f"[LiveBatch {job_id}] Job stopped or failed — stopping runner loop.")
                 break
+
+            if job.get("status") == "paused":
+                # Strictly OFF: do NOT scan messages, do NOT buffer, do NOT post batch links
+                if job_id not in _lb_paused:
+                    _lb_paused[job_id] = asyncio.Event()
+                _lb_paused[job_id].clear()
+                try:
+                    await asyncio.wait_for(_lb_paused[job_id].wait(), timeout=15)
+                except asyncio.TimeoutError:
+                    pass
+                continue
                 
             try:
                 source = job["source"]
@@ -483,7 +521,8 @@ async def _lb_run_job(job_id: str):
                 if prot_err:
                     await _lb_update_job(job_id, {"status": "error", "error": prot_err})
                     try:
-                        await bot_inst.send_message(job["user_id"], prot_err)
+                        if BOT_INSTANCE:
+                            await BOT_INSTANCE.send_message(job["user_id"], prot_err)
                     except Exception:
                         pass
                     return
@@ -651,6 +690,7 @@ async def _lb_run_job(job_id: str):
                 else:
                     existing_buf = set(buffer_mids)
                     new_added = 0
+                    max_inspected_id = max((m.id for m in raw_exists), default=last_seen)
                     
                     use_dup_check = job.get("duplicate_handling") == "yes"
                     target_ch_int = int(job["target"])
@@ -658,7 +698,9 @@ async def _lb_run_job(job_id: str):
 
                     disabled_types = await db.get_filters(job["user_id"])
                     for m in valid:
-                        if m.id in existing_buf:
+                        # Skip if already in buffer or already posted in target channel
+                        if m.id in existing_buf or m.id in posted_source_ids:
+                            last_seen = max(last_seen, m.id)
                             continue
 
                         if not _passes_filters(m, disabled_types):
@@ -702,60 +744,121 @@ async def _lb_run_job(job_id: str):
 
                         buffer_mids.append(m.id)
                         existing_buf.add(m.id)
+                        last_seen = max(last_seen, m.id)
                         new_added += 1
 
-                    if new_added:
-                        logger.info(f"[LiveBatch] Added {new_added} new IDs to buffer. Total: {len(buffer_mids)}")
-
-                    last_seen = max(m.id for m in raw_exists)
-                    await _lb_update_job(job_id, {"last_seen_id": last_seen, "buffer_mids": buffer_mids})
+                    last_seen = max(last_seen, max_inspected_id)
+                    old_last_seen = job.get("last_seen_id", 0)
+                    if last_seen > old_last_seen or new_added:
+                        if new_added:
+                            logger.info(f"[LiveBatch {job_id}] Added {new_added} new IDs to buffer. Total: {len(buffer_mids)}")
+                        upd = {"last_seen_id": last_seen, "buffer_mids": buffer_mids}
+                        if buffer_mids and not job.get("buffer_first_seen_ts"):
+                            upd["buffer_first_seen_ts"] = time.time()
+                        await _lb_update_job(job_id, upd)
+                        job["last_seen_id"] = last_seen
+                        job["buffer_mids"] = buffer_mids
+                        if "buffer_first_seen_ts" in upd:
+                            job["buffer_first_seen_ts"] = upd["buffer_first_seen_ts"]
 
                 fresh_job = await _lb_get_job(job_id)
+                if not fresh_job or fresh_job.get("status") in ("stopped", "failed"):
+                    break
+                if fresh_job.get("status") == "paused":
+                    logger.info(f"[LiveBatch {job_id}] Job is paused/turned OFF — skipping batch processing.")
+                    await asyncio.sleep(10)
+                    continue
+
                 buffer_mids = fresh_job.get("buffer_mids", buffer_mids)
                 force = fresh_job.get("force_flush", False)
 
                 if force:
                     await _lb_update_job(job_id, {"force_flush": False})
 
+                # Check Scheduled Release Delay for new episodes
+                rel_delay_sec = int(fresh_job.get("release_delay_sec", 0) or 0)
+                first_seen_ts = float(fresh_job.get("buffer_first_seen_ts", 0) or 0)
+                now_ts = time.time()
+                is_delay_active = False
+                rem_delay_sec = 0
+
+                if buffer_mids and rel_delay_sec > 0 and first_seen_ts <= 0:
+                    first_seen_ts = now_ts
+                    await _lb_update_job(job_id, {"buffer_first_seen_ts": first_seen_ts})
+
+                if rel_delay_sec > 0 and not force:
+                    if first_seen_ts > 0 and (now_ts < first_seen_ts + rel_delay_sec):
+                        is_delay_active = True
+                        rem_delay_sec = int((first_seen_ts + rel_delay_sec) - now_ts)
+
                 if buffer_mids and (len(buffer_mids) >= thresh or force):
-                    to_post = buffer_mids if force else buffer_mids[:thresh]
-                    while to_post:
-                        chunk_ids = to_post[:100]
-                        remaining_post = to_post[100:]
-                        
-                        actual_msgs = await src_client.get_messages(source, chunk_ids)
-                        if not isinstance(actual_msgs, list): actual_msgs = [actual_msgs]
-                        actual_msgs = [m for m in actual_msgs if m and not m.empty]
-                        
-                        if not actual_msgs:
-                            logger.info(f"[LiveBatch] All {len(chunk_ids)} messages in chunk were deleted or invalid. Removing from buffer.")
-                            buffer_mids = [mid for mid in buffer_mids if mid not in chunk_ids]
-                            await _lb_update_job(job_id, {"buffer_mids": buffer_mids})
+                    if is_delay_active and not force:
+                        from database import format_duration_friendly
+                        logger.info(f"[LiveBatch {job_id}] Threshold reached ({len(buffer_mids)}/{thresh}), holding for release delay ({format_duration_friendly(rem_delay_sec)} remaining)")
+                    else:
+                        to_post = buffer_mids if force else buffer_mids[:thresh]
+                        while to_post:
+                            # Re-verify job hasn't been paused or stopped right before posting
+                            _chk_post = await _lb_get_job(job_id)
+                            if not _chk_post or _chk_post.get("status") != "running":
+                                logger.info(f"[LiveBatch {job_id}] Job no longer running — aborting batch chunk post.")
+                                break
+
+                            chunk_ids = to_post[:100]
+                            remaining_post = to_post[100:]
+
+                            actual_msgs = await src_client.get_messages(source, chunk_ids)
+                            if not isinstance(actual_msgs, list): actual_msgs = [actual_msgs]
+                            actual_msgs = [m for m in actual_msgs if m and not m.empty]
+
+                            if not actual_msgs:
+                                logger.info(f"[LiveBatch {job_id}] All {len(chunk_ids)} messages in chunk were deleted or invalid. Removing from buffer.")
+                                buffer_mids = [mid for mid in buffer_mids if mid not in chunk_ids]
+                                await _lb_update_job(job_id, {"buffer_mids": buffer_mids})
+                                to_post = remaining_post if force else (buffer_mids[:thresh] if len(buffer_mids) >= thresh else [])
+                                continue
+
+                            res = await _post_live_batch(sb_client, job, actual_msgs)
+                            success = res[0] if isinstance(res, tuple) else res
+
+                            if success:
+                                new_mids = res[1] if isinstance(res, tuple) else []
+                                upd_btns = res[2] if isinstance(res, tuple) else []
+
+                                fwd_count += len(chunk_ids)
+                                buffer_mids = [mid for mid in buffer_mids if mid not in chunk_ids]
+
+                                # Record posted source IDs to prevent any duplicate re-posting
+                                posted_source_ids.update(chunk_ids)
+                                try:
+                                    await db.db["live_batch_posted_mids"].update_one(
+                                        {"job_id": job_id},
+                                        {"$addToSet": {"mids": {"$each": chunk_ids}}},
+                                        upsert=True
+                                    )
+                                except Exception as _mid_e:
+                                    logger.debug(f"[LiveBatch {job_id}] Error saving posted mids: {_mid_e}")
+
+                                update_dict = {
+                                    "buffer_mids": buffer_mids,
+                                    "forwarded": fwd_count,
+                                    "last_seen_id": max(last_seen, job.get("last_seen_id", 0)),
+                                    # Crucial: Keep original buffer_first_seen_ts while buffer has items!
+                                    # Only reset to 0 once buffer is completely cleared.
+                                    "buffer_first_seen_ts": (fresh_job.get("buffer_first_seen_ts") or first_seen_ts) if buffer_mids else 0
+                                }
+                                if new_mids: update_dict["posted_mids"] = new_mids
+                                if upd_btns: update_dict["all_buttons"] = upd_btns
+
+                                await _lb_update_job(job_id, update_dict)
+                                job = await _lb_get_job(job_id)
+                                logger.info(f"[LiveBatch {job_id}] Posted batch of {len(chunk_ids)} files. Buffer remaining: {len(buffer_mids)}")
+                                await asyncio.sleep(2)
+                            else:
+                                logger.warning(f"[LiveBatch {job_id}] Post failed, will retry next cycle.")
+                                break
+
                             to_post = remaining_post if force else (buffer_mids[:thresh] if len(buffer_mids) >= thresh else [])
-                            continue
-                        
-                        res = await _post_live_batch(sb_client, job, actual_msgs)
-                        success = res[0] if isinstance(res, tuple) else res
-                        
-                        if success:
-                            new_mids = res[1] if isinstance(res, tuple) else []
-                            upd_btns = res[2] if isinstance(res, tuple) else []
-                            
-                            fwd_count += len(chunk_ids)
-                            buffer_mids = [mid for mid in buffer_mids if mid not in chunk_ids]
-                            
-                            update_dict = {"buffer_mids": buffer_mids, "forwarded": fwd_count}
-                            if new_mids: update_dict["posted_mids"] = new_mids
-                            if upd_btns: update_dict["all_buttons"] = upd_btns
-                            
-                            await _lb_update_job(job_id, update_dict)
-                            job = await _lb_get_job(job_id)
-                            logger.info(f"[LiveBatch] Posted batch of {len(chunk_ids)} files. Buffer remaining: {len(buffer_mids)}")
-                        else:
-                            logger.warning(f"[LiveBatch] Post failed, will retry next cycle.")
-                            break
-                        
-                        to_post = remaining_post if force else (buffer_mids[:thresh] if len(buffer_mids) >= thresh else [])
 
                 now_t = time.time()
                 up_time = job.get("last_prog_update", 0)
@@ -796,7 +899,8 @@ async def _lb_run_job(job_id: str):
 
     finally:
         logger.info(f"Stopping Live Batch job {job_id}")
-        _lb_tasks.pop(job_id, None)
+        if _lb_tasks.get(job_id) is cur_task:
+            _lb_tasks.pop(job_id, None)
         if src_client and src_client is not BOT_INSTANCE:
             try: await src_client.disconnect()
             except: pass
@@ -915,6 +1019,10 @@ async def _lb_do_change_source(bot, uid: int, jid: str):
             "last_seen_id": 0,    # restart from the beginning of the new source
             "buffer_mids": [],    # clear stale buffer
         })
+        try:
+            await db.db["live_batch_posted_mids"].delete_one({"job_id": jid})
+        except Exception:
+            pass
         await bot.send_message(
             uid,
             f"<b>✅ Source updated!</b>\n\n"
@@ -938,7 +1046,10 @@ async def _lb_do_change_source(bot, uid: int, jid: str):
         await bot.send_message(uid, "▶️ <b>Job resumed and now monitoring the new source.</b>")
 
 
-@Client.on_callback_query(filters.regex(r"^lb#(main|setup|view|pause|resume|stop|del|change_src|change_merge|change_buy_link)"))
+from bot import apply_global_button_patches
+apply_global_button_patches()
+
+@Client.on_callback_query(filters.regex(r"^lb#(main|setup|view|pause|resume|stop|del|change_src|change_merge|change_buy_link|change_delay|set_delay|custom_delay|force_ask|force)"))
 async def _lb_callbacks(bot, update: CallbackQuery):
     uid = update.from_user.id
     data = update.data.split("#")
@@ -956,21 +1067,22 @@ async def _lb_callbacks(bot, update: CallbackQuery):
         jobs = await _lb_get_all_jobs(uid)
         active = [j for j in jobs if j.get("status") not in ("failed", "stopped")]
         active_cnt = len([j for j in jobs if j.get("status") in ("running", "queued")])
-        kb = [[InlineKeyboardButton("➕ Cʀᴇᴀᴛᴇ ʟɪᴠᴇ ʙᴀᴛᴄʜ", callback_data="lb#setup")]]
+        kb = [[InlineKeyboardButton("Create Live Batch", callback_data="lb#setup", style="success")]]
         
         row = []
         for i, j in enumerate(active):
             name = str(j.get('story', 'Batch'))[:12]
-            row.append(InlineKeyboardButton(f"📡 {name}", callback_data=f"lb#view#{j['job_id']}"))
+            row.append(InlineKeyboardButton(f"{name}", callback_data=f"lb#view#{j['job_id']}", style="primary"))
             if len(row) == 2:
                 kb.append(row)
                 row = []
         if row: kb.append(row)
-        kb.append([InlineKeyboardButton("❮ Bᴀᴄᴋ ᴛᴏ Mᴀɪɴ", callback_data="sl#start")])
+        kb.append([InlineKeyboardButton("← Back", callback_data="sl#start", style="danger")])
         
         txt = (
-            "<b><u>📡 Oɴɢᴏɪɴɢ Lɪᴠᴇ Bᴀᴛᴄʜ Sʏsᴛᴇᴍ</u></b>\n"
-            f"🟢 <b>Active Tasks:</b> <code>{active_cnt}</code>\n\n"
+            "<b>Batch Links</b>\n"
+            "─────────────────────\n"
+            f"<b>Active Tasks:</b> <code>{active_cnt}</code>\n\n"
             "This daemon seamlessly monitors your Database channel. Once the threshold count is hit, "
             "it effortlessly aggregates the tracked media into structured interactive Batch Buttons and ships them out dynamically."
         )
@@ -985,35 +1097,40 @@ async def _lb_callbacks(bot, update: CallbackQuery):
         kb = []
         if st in ("running", "queued"):
             kb.append([
-                InlineKeyboardButton("⏸ Pᴀᴜsᴇ", callback_data=f"lb#pause#{jid}"),
-                InlineKeyboardButton("⏹ Sᴛᴏᴘ", callback_data=f"lb#stop#{jid}")
+                InlineKeyboardButton("Turn OFF", callback_data=f"lb#pause#{jid}", style="danger"),
+                InlineKeyboardButton("Stop", callback_data=f"lb#stop#{jid}", style="danger")
             ])
         elif st == "paused":
             kb.append([
-                InlineKeyboardButton("▶️ Rᴇsᴜᴍᴇ", callback_data=f"lb#resume#{jid}"),
-                InlineKeyboardButton("⏹ Sᴛᴏᴘ", callback_data=f"lb#stop#{jid}")
+                InlineKeyboardButton("Turn ON (Resume)", callback_data=f"lb#resume#{jid}", style="success"),
+                InlineKeyboardButton("Stop", callback_data=f"lb#stop#{jid}", style="danger")
             ])
 
-        # ── Change Source & Buy Link buttons — available when job is running or paused ──
+        from database import format_duration_friendly
+        rel_delay_sec = int(job.get("release_delay_sec", 0) or 0)
+        rel_delay_str = format_duration_friendly(rel_delay_sec) if rel_delay_sec > 0 else "0s (Instant)"
+
+        # ── Change Source, Buy Link, Merge Size, Release Delay ──
         if st in ("running", "queued", "paused"):
             kb.append([
-                InlineKeyboardButton("✏️ Cʜᴀɴɢᴇ Sᴏᴜʀᴄᴇ", callback_data=f"lb#change_src#{jid}"),
-                InlineKeyboardButton("🧩 Mᴇʀɢᴇ Sɪᴢᴇ", callback_data=f"lb#change_merge#{jid}")
+                InlineKeyboardButton("Change Source", callback_data=f"lb#change_src#{jid}", style="primary"),
+                InlineKeyboardButton("Merge Size", callback_data=f"lb#change_merge#{jid}", style="primary")
             ])
             kb.append([
-                InlineKeyboardButton("🛒 Cʜᴀɴɢᴇ Bᴜʏ Lɪɴᴋ", callback_data=f"lb#change_buy_link#{jid}")
+                InlineKeyboardButton("Change Buy Link", callback_data=f"lb#change_buy_link#{jid}", style="primary"),
+                InlineKeyboardButton(f"Delay: {rel_delay_str}", callback_data=f"lb#change_delay#{jid}", style="primary")
             ])
         
         buf = len(job.get("buffer_mids", []))
         trgt = job.get("threshold", 10)
         
         if buf > 0 and st in ("running", "queued", "paused"):
-            kb.append([InlineKeyboardButton(f"🚀 Fᴏʀᴄᴇ Pᴏsᴛ Nᴏᴡ ({buf} Fɪʟᴇs)", callback_data=f"lb#force_ask#{jid}")])
+            kb.append([InlineKeyboardButton(f"Force Post Now ({buf} Files)", callback_data=f"lb#force_ask#{jid}", style="success")])
             
-        kb.append([InlineKeyboardButton("🔄 Rᴇғʀᴇsʜ", callback_data=f"lb#view#{jid}")])
+        kb.append([InlineKeyboardButton("Refresh", callback_data=f"lb#view#{jid}", style="primary")])
         if st in ("completed", "stopped", "failed"):
-            kb.append([InlineKeyboardButton("🗑 Dᴇʟᴇᴛᴇ Rᴇᴄᴏʀᴅ", callback_data=f"lb#del#{jid}")])
-        kb.append([InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="lb#main")])
+            kb.append([InlineKeyboardButton("Delete Record", callback_data=f"lb#del#{jid}", style="danger")])
+        kb.append([InlineKeyboardButton("← Back", callback_data="lb#main", style="danger")])
         
         # Get active bot info
         acc_lbl = "Default"
@@ -1028,20 +1145,32 @@ async def _lb_callbacks(bot, update: CallbackQuery):
                 acc_lbl = f"{kind}: @{name} (<code>{acc['id']}</code>)" if acc.get("username") else f"{kind}: {name} (<code>{acc['id']}</code>)"
 
         src_display = str(job.get("source", "?"))
-        dup_st = "✅ Enabled" if job.get("duplicate_handling") == "yes" else "❌ Disabled"
+        dup_st = "Enabled" if job.get("duplicate_handling") == "yes" else "Disabled"
         buy_link_disp = str(job.get('premium_buy_link') or job.get('buy_link') or 'Not Set')
+
+        # Holding info if release delay is active
+        delay_info = ""
+        first_seen_ts = float(job.get("buffer_first_seen_ts", 0) or 0)
+        now_ts = time.time()
+        if rel_delay_sec > 0 and first_seen_ts > 0 and (now_ts < first_seen_ts + rel_delay_sec):
+            rem_d = int((first_seen_ts + rel_delay_sec) - now_ts)
+            delay_info = f"\n<b>Delay Holding:</b> <code>{format_duration_friendly(rem_d)} remaining</code>"
+
+        status_disp = "ACTIVE (ON)" if st == "running" else ("DISABLED (OFF)" if st == "paused" else st.upper())
         txt = (
-            f"<b>📡 Lɪᴠᴇ Bᴀᴛᴄʜ Sᴛᴀᴛᴜs</b>\n\n"
-            f"<b>📖 Sᴛᴏʀʏ:</b> <code>{job.get('story')}</code>\n"
-            f"<b>👤 Aᴄᴄᴏᴜɴᴛ:</b> {acc_lbl}\n"
-            f"<b>📥 Sᴏᴜʀᴄᴇ:</b> <code>{src_display}</code>\n"
-            f"<b>ℹ️ Sᴛᴀᴛᴜs:</b> <code>{st.upper()}</code>\n"
-            f"<b>🛒 Bᴜʏ Lɪɴᴋ:</b> <code>{buy_link_disp}</code>\n"
-            f"<b>🔄 Dᴜᴘʟɪᴄᴀᴛᴇ Hᴀɴᴅʟɪɴɢ:</b> <code>{dup_st}</code>\n"
-            f"<b>🎯 Tʜʀᴇsʜᴏʟᴅ:</b> Wait for {trgt} files\n"
-            f"<b>🧩 Mᴇʀɢᴇ Sɪᴢᴇ:</b> <code>{job.get('merge_size', 10)}</code> files\n"
-            f"<b>📦 Cᴜʀʀᴇɴᴛ Bᴜғғᴇʀ:</b> <code>{buf} / {trgt}</code>\n"
-            f"<b>✅ Tᴏᴛᴀʟ Fᴏʀᴡᴀʀᴅᴇᴅ:</b> <code>{job.get('forwarded', 0)}</code>\n\n"
+            "<b>Live Batch Status</b>\n"
+            "─────────────────────\n"
+            f"<b>Story:</b> <code>{job.get('story')}</code>\n"
+            f"<b>Account:</b> {acc_lbl}\n"
+            f"<b>Source:</b> <code>{src_display}</code>\n"
+            f"<b>Status:</b> <code>{status_disp}</code>\n"
+            f"<b>Buy Link:</b> <code>{buy_link_disp}</code>\n"
+            f"<b>Duplicate Handling:</b> <code>{dup_st}</code>\n"
+            f"<b>Release Delay:</b> <code>{rel_delay_str}</code>{delay_info}\n"
+            f"<b>Threshold:</b> Wait for {trgt} files\n"
+            f"<b>Merge Size:</b> <code>{job.get('merge_size', 10)}</code> files\n"
+            f"<b>Current Buffer:</b> <code>{buf} / {trgt}</code>\n"
+            f"<b>Total Forwarded:</b> <code>{job.get('forwarded', 0)}</code>\n\n"
             f"<i>Auto-checks source database continuously.</i>"
         )
         try: await update.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(kb))
@@ -1110,15 +1239,104 @@ async def _lb_callbacks(bot, update: CallbackQuery):
 
     elif action == "pause":
         jid = data[2]
-        if jid in _lb_paused: _lb_paused[jid].clear()
+        if jid not in _lb_paused:
+            _lb_paused[jid] = asyncio.Event()
+        _lb_paused[jid].clear()
         await _lb_update_job(jid, {"status": "paused"})
+        try:
+            await update.answer("🔴 Live Batch turned OFF! No links will be sent.", show_alert=True)
+        except Exception:
+            pass
         update.data = f"lb#view#{jid}"
         return await _lb_callbacks(bot, update)
-        
+
+    elif action == "change_delay":
+        jid = data[2]
+        job = await _lb_get_job(jid)
+        if not job: return await update.answer("Job not found.", show_alert=True)
+
+        from database import format_duration_friendly
+        curr_delay = int(job.get("release_delay_sec", 0) or 0)
+        curr_str = format_duration_friendly(curr_delay) if curr_delay > 0 else "0s (Instant)"
+
+        txt = (
+            "<b><u>Scheduled Release Delay</u></b>\n\n"
+            f"Current Setting: <b><code>{curr_str}</code></b>\n\n"
+            "Set how long new episodes from the source channel should be held before auto-posting to the target channel.\n"
+            "<i>(Useful for VIP/Paid exclusivity windows before releasing files to free users).</i>\n\n"
+            "Choose a preset below or enter a custom delay:"
+        )
+        kb = [
+            [
+                InlineKeyboardButton("0s (Instant)", callback_data=f"lb#set_delay#0#{jid}", style="success"),
+                InlineKeyboardButton("1 Minute", callback_data=f"lb#set_delay#60#{jid}", style="primary"),
+            ],
+            [
+                InlineKeyboardButton("1 Hour", callback_data=f"lb#set_delay#3600#{jid}", style="primary"),
+                InlineKeyboardButton("1 Day", callback_data=f"lb#set_delay#86400#{jid}", style="primary"),
+                InlineKeyboardButton("5 Days", callback_data=f"lb#set_delay#432000#{jid}", style="primary"),
+            ],
+            [
+                InlineKeyboardButton("Custom Delay Input", callback_data=f"lb#custom_delay#{jid}", style="primary")
+            ],
+            [InlineKeyboardButton("← Back", callback_data=f"lb#view#{jid}", style="danger")]
+        ]
+        return await update.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(kb))
+
+    elif action == "set_delay":
+        sec = int(data[2])
+        jid = data[3]
+        await _lb_update_job(jid, {"release_delay_sec": sec})
+        from database import format_duration_friendly
+        sec_str = format_duration_friendly(sec) if sec > 0 else "0s (Instant)"
+        await update.answer(f"✅ Release Delay set to {sec_str}!", show_alert=True)
+        update.data = f"lb#view#{jid}"
+        return await _lb_callbacks(bot, update)
+
+    elif action == "custom_delay":
+        jid = data[2]
+        job = await _lb_get_job(jid)
+        if not job: return await update.answer("Job not found.", show_alert=True)
+
+        try:
+            ask_msg = await bot.ask(
+                uid,
+                "⏱️ <b>Eɴᴛᴇʀ Cᴜsᴛᴏᴍ Rᴇʟᴇᴀsᴇ Dᴇʟᴀʏ</b>\n\n"
+                "Specify how long new episodes should be held before posting to target channel.\n"
+                "Examples:\n"
+                "• <code>30m</code> (30 minutes)\n"
+                "• <code>2h</code> (2 hours)\n"
+                "• <code>1d</code> (1 day)\n"
+                "• <code>5d</code> (5 days)\n"
+                "• <code>0</code> (instant post)\n\n"
+                "<i>Send ⛔ to cancel.</i>",
+                timeout=120
+            )
+            text = (ask_msg.text or "").strip()
+            if not text or "⛔" in text or text.lower() == "cancel":
+                await bot.send_message(uid, "<i>Cancelled.</i>")
+            else:
+                from database import parse_duration_to_seconds, format_duration_friendly
+                try:
+                    if text in ("0", "none", "instant"):
+                        sec = 0
+                    else:
+                        sec = parse_duration_to_seconds(text, default_unit='h')
+                    await _lb_update_job(jid, {"release_delay_sec": sec})
+                    sec_str = format_duration_friendly(sec) if sec > 0 else "0s (Instant)"
+                    await bot.send_message(uid, f"✅ <b>Release Delay updated to {sec_str}!</b>")
+                except Exception as pe:
+                    await bot.send_message(uid, f"❌ <b>Invalid format:</b> {pe}")
+        except asyncio.TimeoutError:
+            await bot.send_message(uid, "<i>⏱ Timed out.</i>")
+
+        update.data = f"lb#view#{jid}"
+        return await _lb_callbacks(bot, update)
+
     elif action == "force_ask":
         jid = data[2]
         txt = (
-            "⚠️ <b>WARNING: FORCE BATCH POST</b>\n\n"
+            "<b>WARNING: FORCE BATCH POST</b>\n\n"
             "You are about to force this batch post before the normal buffer threshold is met.\n\n"
             "<b>Potential Issues:</b>\n"
             "• <b>Spam Rules:</b> Posting smaller batches too rapidly can annoy subscribers and trigger Telegram floodwaits.\n"
@@ -1126,8 +1344,8 @@ async def _lb_callbacks(bot, update: CallbackQuery):
             "Are you sure you want to force this post immediately?"
         )
         kb = [
-            [InlineKeyboardButton("✅ Yes, Force Post Now", callback_data=f"lb#force#{jid}")],
-            [InlineKeyboardButton("⛔ Cancel (Keep Buffer)", callback_data=f"lb#view#{jid}")]
+            [InlineKeyboardButton("Yes, Force Post Now", callback_data=f"lb#force#{jid}", style="success")],
+            [InlineKeyboardButton("Cancel (Keep Buffer)", callback_data=f"lb#view#{jid}", style="danger")]
         ]
         return await update.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(kb))
 
@@ -1154,6 +1372,10 @@ async def _lb_callbacks(bot, update: CallbackQuery):
         _lb_paused[jid].set()
         if jid not in _lb_tasks or _lb_tasks[jid].done():
             _lb_tasks[jid] = asyncio.create_task(_lb_run_job(jid))
+        try:
+            await update.answer("🟢 Live Batch turned ON! Monitoring active.", show_alert=True)
+        except Exception:
+            pass
         update.data = f"lb#view#{jid}"
         return await _lb_callbacks(bot, update)
 
@@ -1239,20 +1461,36 @@ async def _lb_help_us_callback(bot, query: CallbackQuery):
             f"▣ आपका सहयोग हमारे सर्वर को बनाए रखने और हमारी लाइब्रेरी का विस्तार करने में सहायता करता है।"
         )
         
-        donate_kb = InlineKeyboardMarkup([
+        donate_api_kb = [
             [
-                InlineKeyboardButton("Support via UPI", callback_data="sbd#donate")
+                {"text": "Support Via UPI", "callback_data": "sbd#donate", "icon_custom_emoji_id": "6030443364178992166", "style": "success"}
             ],
             [
-                InlineKeyboardButton("Support via Cashfree", url="https://cfpe.me/aryapremium")
+                {"text": "Support via Cashfree", "url": "https://cfpe.me/aryapremium", "icon_custom_emoji_id": "6030443364178992166", "style": "success"}
+            ]
+        ]
+        donate_kb = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("Support Via UPI", callback_data="sbd#donate", icon_custom_emoji_id="6030443364178992166", style="success")
+            ],
+            [
+                InlineKeyboardButton("Support via Cashfree", url="https://cfpe.me/aryapremium", icon_custom_emoji_id="6030443364178992166", style="success")
             ]
         ])
 
         sent_dm = False
         if user and user.id:
             try:
-                await bot.send_message(user.id, don_text, reply_markup=donate_kb)
-                sent_dm = True
+                from plugins.share_bot import send_or_edit_with_custom_icons
+                sent_dm = await send_or_edit_with_custom_icons(
+                    client=bot,
+                    chat_id=user.id,
+                    text=don_text,
+                    inline_keyboard=donate_api_kb
+                )
+                if not sent_dm:
+                    await bot.send_message(user.id, don_text, reply_markup=donate_kb)
+                    sent_dm = True
             except Exception as ex:
                 logger.info(f"[HelpUsCallback] DM send skipped/failed for user {user.id}: {ex}")
 
