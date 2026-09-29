@@ -167,7 +167,7 @@ async def _sb_set_text_flow(bot, user_id, query, b_id: str, key: str,
     await query.message.delete()
     ask = await bot.send_message(
         user_id,
-        f"<b>»  Set {label}</b>\n\n{instructions}\n\n"
+        f"<b>Set {label}</b>\n\n{instructions}\n\n"
         "Send /reset to remove current value.\n"
         "/cancel to abort."
     )
@@ -178,16 +178,16 @@ async def _sb_set_text_flow(bot, user_id, query, b_id: str, key: str,
             try: await resp.delete()
             except: pass
             return await ask.edit_text(
-                "<i>Process Cancelled Successfully!</i>",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=back_cb)]])
+                "<i>Process Cancelled!</i>",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data=back_cb)]])
             )
         if raw_txt.strip() == "/reset":
             try: await resp.delete()
             except: pass
             await db.set_share_bot_text(b_id, key, "")
             return await ask.edit_text(
-                f"»  {label} reset to default.",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=back_cb)]])
+                f"<b>{label} reset to default.</b>",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data=back_cb)]])
             )
         
         txt = ""
@@ -200,20 +200,12 @@ async def _sb_set_text_flow(bot, user_id, query, b_id: str, key: str,
         except: pass
         await db.set_share_bot_text(b_id, key, txt)
         await ask.edit_text(
-            f"»  {label} saved!",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=back_cb)]])
+            f"<b>{label} saved successfully!</b>",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data=back_cb)]])
         )
     except asyncio.TimeoutError:
-        try:
-            await ask.edit_text(
-                "Timeout.",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=back_cb)]])
-            )
-        except Exception:
-            pass
+        await ask.edit_text("Timed out.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data=back_cb)]]))
 
-
-@Client.on_message(filters.command('settings'))
 async def settings(client, message):
     await message.delete()
     user_id = message.from_user.id
@@ -751,47 +743,57 @@ async def settings_query(bot, query):
       )
       await _send_or_edit_fast(query, text, buttons, api_buttons=api_buttons, bot=bot)
       
-  elif type=="shorteners":
-     apis = await db.get_shortener_apis()
-     aro = apis.get("arolinks", "")
-     shx = apis.get("urlshortx", "")
-     text = (
-         "<b><u>🔗 URL Shortener APIs</u></b>\n\n"
-         f"<b>1. AroLinks:</b> {'✅ Set' if aro else '❌ Not Set'}\n"
-         f"<b>2. UrlShortX:</b> {'✅ Set' if shx else '❌ Not Set'}\n\n"
-         "<i>Configure your API keys here so they can be used while generating Batch Links.</i>"
-     )
-     buttons = [
-         [InlineKeyboardButton("AroLinks", callback_data="settings#set_arolinks"),
-          InlineKeyboardButton("UrlShortX", callback_data="settings#set_urlshortx")],
-         [InlineKeyboardButton("🗑 Clear AroLinks", callback_data="settings#clear_arolinks"),
-          InlineKeyboardButton("🗑 Clear UrlShortX", callback_data="settings#clear_urlshortx")],
-         [InlineKeyboardButton('❮ Bᴀᴄᴋ', callback_data="settings#sharebot")]
-     ]
-     await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
+  elif type == "shorteners" or type.startswith("sb_shorteners_"):
+      b_id = type.split("sb_shorteners_")[1] if type.startswith("sb_shorteners_") else None
+      apis = await db.get_shortener_apis()
+      aro = apis.get("arolinks", "")
+      shx = apis.get("urlshortx", "")
+      text = (
+          "<b>URL Shortener APIs</b>\n\n"
+          f"• <b>AroLinks:</b> {'✅ Set' if aro else '❌ Not Set'}\n"
+          f"• <b>UrlShortX:</b> {'✅ Set' if shx else '❌ Not Set'}\n\n"
+          "<i>Configure shortener API keys below to monetize batch links and file deliveries.</i>"
+      )
+      back_target = f"settings#sb_view_{b_id}" if b_id else "settings#sharebot"
+      set_aro_cb = f"settings#set_arolinks_{b_id}" if b_id else "settings#set_arolinks"
+      set_shx_cb = f"settings#set_urlshortx_{b_id}" if b_id else "settings#set_urlshortx"
+      clr_aro_cb = f"settings#clear_arolinks_{b_id}" if b_id else "settings#clear_arolinks"
+      clr_shx_cb = f"settings#clear_urlshortx_{b_id}" if b_id else "settings#clear_urlshortx"
+      buttons = [
+          [InlineKeyboardButton("Set AroLinks", callback_data=set_aro_cb),
+           InlineKeyboardButton("Set UrlShortX", callback_data=set_shx_cb)],
+          [InlineKeyboardButton("Clear AroLinks", callback_data=clr_aro_cb),
+           InlineKeyboardButton("Clear UrlShortX", callback_data=clr_shx_cb)],
+          [InlineKeyboardButton("Back", callback_data=back_target)]
+      ]
+      await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
 
   elif type.startswith("set_arolinks") or type.startswith("set_urlshortx"):
-     await query.message.delete()
-     key = "arolinks" if "arolinks" in type else "urlshortx"
-     ask = await bot.send_message(user_id, f"<b>Enter your API Key for {key}:</b>\n\nSend <code>/cancel</code> to abort.")
-     try:
-         resp = await _ask(bot, user_id, timeout=120)
-         if getattr(resp, "text", None) and "/cancel" in resp.text:
-             await resp.delete()
-             return await ask.edit_text("<i>Process Cancelled!</i>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="settings#shorteners")]]))
-         await db.update_shortener_apis(key, resp.text.strip())
-         await resp.delete()
-         await ask.edit_text(f"✅ {key} API Key saved successfully!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="settings#shorteners")]]))
-     except Exception:
-         await ask.edit_text("Timeout.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="settings#shorteners")]]))
+      await query.message.delete()
+      is_aro = "arolinks" in type
+      key = "arolinks" if is_aro else "urlshortx"
+      b_id = type.split(f"set_{key}_")[1] if f"set_{key}_" in type else None
+      back_target = f"settings#sb_shorteners_{b_id}" if b_id else "settings#shorteners"
+      ask = await bot.send_message(user_id, f"<b>Enter your API Key for {key}:</b>\n\nSend <code>/cancel</code> to abort.")
+      try:
+          resp = await _ask(bot, user_id, timeout=120)
+          if getattr(resp, "text", None) and "/cancel" in resp.text:
+              await resp.delete()
+              return await ask.edit_text("<i>Process Cancelled!</i>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data=back_target)]]))
+          await db.update_shortener_apis(key, resp.text.strip())
+          await resp.delete()
+          await ask.edit_text(f"✅ {key} API Key saved successfully!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data=back_target)]]))
+      except Exception:
+          await ask.edit_text("Timeout.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data=back_target)]]))
 
   elif type.startswith("clear_arolinks") or type.startswith("clear_urlshortx"):
-     key = "arolinks" if "arolinks" in type else "urlshortx"
-     await db.update_shortener_apis(key, "")
-     query.data = "settings#shorteners"
-     return await settings_query(bot, query)
+      is_aro = "arolinks" in type
+      key = "arolinks" if is_aro else "urlshortx"
+      b_id = type.split(f"clear_{key}_")[1] if f"clear_{key}_" in type else None
+      await db.update_shortener_apis(key, "")
+      query.data = f"settings#sb_shorteners_{b_id}" if b_id else "settings#shorteners"
+      return await settings_query(bot, query)
 
-     
   elif type=="main_menu_img":
      await query.message.delete()
      ask = await bot.send_message(
@@ -1102,7 +1104,6 @@ async def settings_query(bot, query):
      buttons.append([InlineKeyboardButton("Anti Abuse", callback_data="settings#sb_anti_abuse", style="primary")])
      buttons.append([InlineKeyboardButton("Rate Limit & Pass", callback_data="settings#sb_ratelimit", style="primary")])
      buttons.append([InlineKeyboardButton(f"Clone Bot Link ({clone_lbl})", callback_data="settings#sb_clone_link", style="primary")])
-     buttons.append([InlineKeyboardButton("• Shorteners •", callback_data="settings#shorteners", style="primary")])
      buttons.append([InlineKeyboardButton("──── Delivery Bots ────", callback_data="settings#noop", style="primary")])
 
      api_buttons = [
@@ -3309,41 +3310,49 @@ async def settings_query(bot, query):
       bt = next((x for x in bots if str(x['id']) == str(b_id)), None)
       if not bt: return await query.answer("Bot not found!")
 
-      is_store_mode = await db.is_store_bot_mode(b_id)
-      mode_str = "🛍️ Pay-Per-Show Store" if is_store_mode else "⚡ Normal Delivery"
-      mode_icon = "6104800784354909891" if is_store_mode else "5803175856905917502"
+      mode = await db.get_delivery_bot_mode(b_id)
+      is_pro_mode = (mode == "pro")
+      mode_str = "👑 Pro Mode" if is_pro_mode else "⚡ Normal Mode"
+      mode_icon = "6030443364178992166" if is_pro_mode else "5803175856905917502"
 
-      if is_store_mode:
+      if not is_pro_mode:
+          # Normal Mode (Default): Clean file delivery with Fsub & Shorteners
           buttons = [
-              [InlineKeyboardButton(f"🛍️ Bot Mode: {mode_str}", callback_data=f"settings#sb_toggle_mode_{b_id}")],
-              [InlineKeyboardButton('👋 Welcome & About', callback_data=f"settings#sb_wa_{b_id}")],
+              [InlineKeyboardButton(f"Bot Mode: {mode_str}", callback_data=f"settings#sb_toggle_mode_{b_id}")],
+              [InlineKeyboardButton("Welcome, About & Menu", callback_data=f"settings#sb_wa_{b_id}")],
               [
-                  InlineKeyboardButton('🗑 Delete MSG', callback_data=f"settings#sb_set_delete_{b_id}"),
-                  InlineKeyboardButton('✅ Success MSG', callback_data=f"settings#sb_set_success_{b_id}"),
+                  InlineKeyboardButton("Force Subscribe", callback_data=f"settings#sb_fsub_{b_id}"),
+                  InlineKeyboardButton("Shorteners", callback_data=f"settings#sb_shorteners_{b_id}")
               ],
-              [InlineKeyboardButton('📝 Custom Caption', callback_data=f"settings#sb_caption_menu_{b_id}")],
-              [InlineKeyboardButton('🔗 Custom Buttons', callback_data=f"settings#sb_buttons_menu_{b_id}")],
-              [InlineKeyboardButton('⏳ Auto Delete (15m)', callback_data=f"settings#sb_autodel_menu_{b_id}")],
-              [InlineKeyboardButton('💰 Store Show Settings', callback_data=f"settings#sb_store_settings_{b_id}")],
               [
-                  InlineKeyboardButton('📊 Stats', callback_data=f"settings#sb_stats_{b_id}"),
-                  InlineKeyboardButton('📢 Broadcast', callback_data=f"settings#sb_broadcast_{b_id}")
+                  InlineKeyboardButton("Delete MSG", callback_data=f"settings#sb_set_delete_{b_id}"),
+                  InlineKeyboardButton("Success MSG", callback_data=f"settings#sb_set_success_{b_id}")
               ],
-              [InlineKeyboardButton('🧹 Purge DM Files', callback_data=f"settings#sb_purge_{b_id}")],
-              [InlineKeyboardButton('❌ Remove Bot', callback_data=f"settings#sb_remove_{b_id}")],
-              [InlineKeyboardButton('Back', callback_data="settings#sharebot")],
+              [InlineKeyboardButton("Custom Caption", callback_data=f"settings#sb_caption_menu_{b_id}")],
+              [InlineKeyboardButton("Custom Buttons", callback_data=f"settings#sb_buttons_menu_{b_id}")],
+              [InlineKeyboardButton("Auto Delete", callback_data=f"settings#sb_autodel_menu_{b_id}")],
+              [
+                  InlineKeyboardButton("Stats", callback_data=f"settings#sb_stats_{b_id}"),
+                  InlineKeyboardButton("Broadcast", callback_data=f"settings#sb_broadcast_{b_id}")
+              ],
+              [InlineKeyboardButton("Purge DM Files", callback_data=f"settings#sb_purge_{b_id}")],
+              [InlineKeyboardButton("Remove Bot", callback_data=f"settings#sb_remove_{b_id}")],
+              [InlineKeyboardButton("Back", callback_data="settings#sharebot")],
           ]
           api_buttons = [
               [{"text": f"Bot Mode: {mode_str}", "callback_data": f"settings#sb_toggle_mode_{b_id}", "icon_custom_emoji_id": mode_icon}],
-              [{"text": "Welcome & About", "callback_data": f"settings#sb_wa_{b_id}", "icon_custom_emoji_id": "5219901967916084166"}],
+              [{"text": "Welcome, About & Menu", "callback_data": f"settings#sb_wa_{b_id}", "icon_custom_emoji_id": "5219901967916084166"}],
+              [
+                  {"text": "Force Subscribe", "callback_data": f"settings#sb_fsub_{b_id}", "icon_custom_emoji_id": "6021738534916854774"},
+                  {"text": "Shorteners", "callback_data": f"settings#sb_shorteners_{b_id}", "icon_custom_emoji_id": "5807622114424924272"}
+              ],
               [
                   {"text": "Delete MSG", "callback_data": f"settings#sb_set_delete_{b_id}", "icon_custom_emoji_id": "6021413766669801212"},
                   {"text": "Success MSG", "callback_data": f"settings#sb_set_success_{b_id}", "icon_custom_emoji_id": "6021738534916854774"}
               ],
-              [{"text": "Costom Caption", "callback_data": f"settings#sb_caption_menu_{b_id}", "icon_custom_emoji_id": "6023843687367190257"}],
-              [{"text": "Custom Bottons", "callback_data": f"settings#sb_buttons_menu_{b_id}", "icon_custom_emoji_id": "5807622114424924272"}],
-              [{"text": "Auto Delete (15m)", "callback_data": f"settings#sb_autodel_menu_{b_id}", "icon_custom_emoji_id": "6035276353438227060"}],
-              [{"text": "Store Show Settings", "callback_data": f"settings#sb_store_settings_{b_id}", "icon_custom_emoji_id": "5904359114531675993"}],
+              [{"text": "Custom Caption", "callback_data": f"settings#sb_caption_menu_{b_id}", "icon_custom_emoji_id": "6023843687367190257"}],
+              [{"text": "Custom Buttons", "callback_data": f"settings#sb_buttons_menu_{b_id}", "icon_custom_emoji_id": "5807622114424924272"}],
+              [{"text": "Auto Delete", "callback_data": f"settings#sb_autodel_menu_{b_id}", "icon_custom_emoji_id": "6035276353438227060"}],
               [
                   {"text": "Stats", "callback_data": f"settings#sb_stats_{b_id}", "icon_custom_emoji_id": "5938539885907415367"},
                   {"text": "Broadcast", "callback_data": f"settings#sb_broadcast_{b_id}", "icon_custom_emoji_id": "6019151667524539757"}
@@ -3353,36 +3362,42 @@ async def settings_query(bot, query):
               [{"text": "Back", "callback_data": "settings#sharebot"}],
           ]
       else:
+          # Pro Mode: Full advanced features (Post delivery mode, donation, premium ads, fetching media)
           buttons = [
-              [InlineKeyboardButton(f"🛍️ Bot Mode: {mode_str}", callback_data=f"settings#sb_toggle_mode_{b_id}")],
-              [InlineKeyboardButton('👋 Welcome & About', callback_data=f"settings#sb_wa_{b_id}")],
+              [InlineKeyboardButton(f"Bot Mode: {mode_str}", callback_data=f"settings#sb_toggle_mode_{b_id}")],
+              [InlineKeyboardButton("Welcome, About & Menu", callback_data=f"settings#sb_wa_{b_id}")],
               [
-                  InlineKeyboardButton('🗑 Delete MSG', callback_data=f"settings#sb_set_delete_{b_id}"),
-                  InlineKeyboardButton('✅ Success MSG', callback_data=f"settings#sb_set_success_{b_id}"),
+                  InlineKeyboardButton("Force Subscribe", callback_data=f"settings#sb_fsub_{b_id}"),
+                  InlineKeyboardButton("Shorteners", callback_data=f"settings#sb_shorteners_{b_id}")
               ],
-              [InlineKeyboardButton('📣 Post Delivery Mode', callback_data=f"settings#sb_post_deliv_{b_id}")],
               [
-                  InlineKeyboardButton('🎁 Donation MSG', callback_data=f"settings#sb_donation_{b_id}"),
-                  InlineKeyboardButton('⭐ Premium Ad MSG', callback_data=f"settings#sb_premium_ad_{b_id}"),
+                  InlineKeyboardButton("Delete MSG", callback_data=f"settings#sb_set_delete_{b_id}"),
+                  InlineKeyboardButton("Success MSG", callback_data=f"settings#sb_set_success_{b_id}")
               ],
-              [InlineKeyboardButton('📝 Custom Caption', callback_data=f"settings#sb_caption_menu_{b_id}")],
-              [InlineKeyboardButton('🔗 Custom Buttons', callback_data=f"settings#sb_buttons_menu_{b_id}")],
+              [InlineKeyboardButton("Post Delivery Mode", callback_data=f"settings#sb_post_deliv_{b_id}")],
               [
-                  InlineKeyboardButton('⏳ Auto Delete', callback_data=f"settings#sb_autodel_menu_{b_id}"),
-                  InlineKeyboardButton('📢 Force Subscribe', callback_data=f"settings#sb_fsub_{b_id}")
+                  InlineKeyboardButton("Donation MSG", callback_data=f"settings#sb_donation_{b_id}"),
+                  InlineKeyboardButton("Premium Ad MSG", callback_data=f"settings#sb_premium_ad_{b_id}")
               ],
-              [InlineKeyboardButton('🎞 Fetching Media', callback_data=f"settings#sb_fetch_media_{b_id}")],
+              [InlineKeyboardButton("Fetching Media", callback_data=f"settings#sb_fetch_media_{b_id}")],
+              [InlineKeyboardButton("Custom Caption", callback_data=f"settings#sb_caption_menu_{b_id}")],
+              [InlineKeyboardButton("Custom Buttons", callback_data=f"settings#sb_buttons_menu_{b_id}")],
+              [InlineKeyboardButton("Auto Delete", callback_data=f"settings#sb_autodel_menu_{b_id}")],
               [
-                  InlineKeyboardButton('📊 Stats', callback_data=f"settings#sb_stats_{b_id}"),
-                  InlineKeyboardButton('📢 Broadcast', callback_data=f"settings#sb_broadcast_{b_id}")
+                  InlineKeyboardButton("Stats", callback_data=f"settings#sb_stats_{b_id}"),
+                  InlineKeyboardButton("Broadcast", callback_data=f"settings#sb_broadcast_{b_id}")
               ],
-              [InlineKeyboardButton('🧹 Purge DM Files', callback_data=f"settings#sb_purge_{b_id}")],
-              [InlineKeyboardButton('❌ Remove Bot', callback_data=f"settings#sb_remove_{b_id}")],
-              [InlineKeyboardButton('Back', callback_data="settings#sharebot")],
+              [InlineKeyboardButton("Purge DM Files", callback_data=f"settings#sb_purge_{b_id}")],
+              [InlineKeyboardButton("Remove Bot", callback_data=f"settings#sb_remove_{b_id}")],
+              [InlineKeyboardButton("Back", callback_data="settings#sharebot")],
           ]
           api_buttons = [
               [{"text": f"Bot Mode: {mode_str}", "callback_data": f"settings#sb_toggle_mode_{b_id}", "icon_custom_emoji_id": mode_icon}],
-              [{"text": "Welcome & About", "callback_data": f"settings#sb_wa_{b_id}", "icon_custom_emoji_id": "5219901967916084166"}],
+              [{"text": "Welcome, About & Menu", "callback_data": f"settings#sb_wa_{b_id}", "icon_custom_emoji_id": "5219901967916084166"}],
+              [
+                  {"text": "Force Subscribe", "callback_data": f"settings#sb_fsub_{b_id}", "icon_custom_emoji_id": "6021738534916854774"},
+                  {"text": "Shorteners", "callback_data": f"settings#sb_shorteners_{b_id}", "icon_custom_emoji_id": "5807622114424924272"}
+              ],
               [
                   {"text": "Delete MSG", "callback_data": f"settings#sb_set_delete_{b_id}", "icon_custom_emoji_id": "6021413766669801212"},
                   {"text": "Success MSG", "callback_data": f"settings#sb_set_success_{b_id}", "icon_custom_emoji_id": "6021738534916854774"}
@@ -3392,13 +3407,10 @@ async def settings_query(bot, query):
                   {"text": "Donation MSG", "callback_data": f"settings#sb_donation_{b_id}", "icon_custom_emoji_id": "6024112397701093503"},
                   {"text": "Premium Ad MSG", "callback_data": f"settings#sb_premium_ad_{b_id}", "icon_custom_emoji_id": "6021789619257874157"}
               ],
-              [{"text": "Costom Caption", "callback_data": f"settings#sb_caption_menu_{b_id}", "icon_custom_emoji_id": "6023843687367190257"}],
-              [{"text": "Custom Bottons", "callback_data": f"settings#sb_buttons_menu_{b_id}", "icon_custom_emoji_id": "5807622114424924272"}],
-              [
-                  {"text": "Auto Delete", "callback_data": f"settings#sb_autodel_menu_{b_id}", "icon_custom_emoji_id": "6035276353438227060"},
-                  {"text": "Force Subscribe", "callback_data": f"settings#sb_fsub_{b_id}", "icon_custom_emoji_id": "6021738534916854774"}
-              ],
               [{"text": "Fetching Media", "callback_data": f"settings#sb_fetch_media_{b_id}", "icon_custom_emoji_id": "5944753741512052670"}],
+              [{"text": "Custom Caption", "callback_data": f"settings#sb_caption_menu_{b_id}", "icon_custom_emoji_id": "6023843687367190257"}],
+              [{"text": "Custom Buttons", "callback_data": f"settings#sb_buttons_menu_{b_id}", "icon_custom_emoji_id": "5807622114424924272"}],
+              [{"text": "Auto Delete", "callback_data": f"settings#sb_autodel_menu_{b_id}", "icon_custom_emoji_id": "6035276353438227060"}],
               [
                   {"text": "Stats", "callback_data": f"settings#sb_stats_{b_id}", "icon_custom_emoji_id": "5938539885907415367"},
                   {"text": "Broadcast", "callback_data": f"settings#sb_broadcast_{b_id}", "icon_custom_emoji_id": "6019151667524539757"}
@@ -3413,14 +3425,14 @@ async def settings_query(bot, query):
       b_uid = bt.get('id', '')
 
       text = (
-          f'<emoji id="6037622221625626773">🤖</emoji> <b>Share Bot Profile</b>\n'
+          f'🤖 <b>Delivery Bot Profile</b>\n'
           f"────────────────────\n"
-          f'<emoji id="6030400221232501136">👤</emoji> <b>Name:-</b> {b_name}\n'
-          f'<emoji id="6021683099773966917">🌐</emoji> <b>Username:-</b> @{b_user}\n'
-          f'<emoji id="5332423642850536254">🆔</emoji> <b>ID:-</b> <code>{b_uid}</code>\n'
-          f'<emoji id="{mode_icon}">🛍️</emoji> <b>Mode:-</b> <code>{mode_str}</code>\n'
+          f'👤 <b>Name:</b> {b_name}\n'
+          f'🌐 <b>Username:</b> @{b_user}\n'
+          f'🆔 <b>ID:</b> <code>{b_uid}</code>\n'
+          f'⚙️ <b>Mode:</b> <code>{mode_str}</code>\n'
           f"────────────────────\n"
-          f"<u>All settings below are specific to this bot.</u>"
+          f"All settings below are specific to this bot."
       )
 
       await _send_or_edit_fast(query, text, buttons, api_buttons=api_buttons, bot=bot)
@@ -3587,10 +3599,10 @@ async def settings_query(bot, query):
 
   elif type.startswith("sb_toggle_mode_"):
       b_id = type.split("sb_toggle_mode_")[1]
-      cur = await db.is_store_bot_mode(b_id)
-      new_state = not cur
-      await db.set_store_bot_mode(b_id, new_state)
-      mode_name = "🛍️ Pay-Per-Show Store Bot" if new_state else "⚡ Normal Delivery Bot"
+      cur = await db.get_delivery_bot_mode(b_id)
+      new_mode = "pro" if cur == "normal" else "normal"
+      await db.set_delivery_bot_mode(b_id, new_mode)
+      mode_name = "👑 Pro Mode" if new_mode == "pro" else "⚡ Normal Mode"
       await query.answer(f"Bot Mode switched to: {mode_name}!", show_alert=True)
       query.data = f"settings#sb_view_{b_id}"
       return await settings_query(bot, query)
@@ -4310,19 +4322,32 @@ async def settings_query(bot, query):
 
   elif type.startswith("sb_wa_"):
       b_id = type.split("sb_wa_")[1]
+      bots = await db.get_share_bots()
+      bt = next((x for x in bots if str(x.get('id', '')) == str(b_id)), None)
+      bot_name = bt.get('name', 'Delivery Bot') if bt else "Delivery Bot"
       buttons = [
-          [
-              InlineKeyboardButton('Wᴇʟᴄᴏᴍᴇ Msɢ',    callback_data=f"settings#sb_set_welcome_{b_id}"),
-          ],
-          [InlineKeyboardButton('Aʙᴏᴜᴛ',        callback_data=f"settings#sb_about_{b_id}")],
-          [InlineKeyboardButton('Mᴇɴᴜ Iᴍᴀɢᴇ',  callback_data=f"settings#sb_menu_mgr_{b_id}")],
-          [InlineKeyboardButton('❮ Bᴀᴄᴋ',         callback_data=f"settings#sb_view_{b_id}")],
+          [InlineKeyboardButton("Welcome Message", callback_data=f"settings#sb_set_welcome_{b_id}")],
+          [InlineKeyboardButton("About Section", callback_data=f"settings#sb_about_{b_id}")],
+          [InlineKeyboardButton("Menu Images", callback_data=f"settings#sb_menu_mgr_{b_id}")],
+          [InlineKeyboardButton("Back", callback_data=f"settings#sb_view_{b_id}")],
       ]
-      await query.message.edit_text(
-          f"<b>❪ WELCOME, ABOUT & MENU ❫</b>\n\n"
-          "Select what you want to configure for this bot:",
-          reply_markup=InlineKeyboardMarkup(buttons)
+      api_buttons = [
+          [{"text": "Welcome Message", "callback_data": f"settings#sb_set_welcome_{b_id}", "icon_custom_emoji_id": "5219901967916084166"}],
+          [{"text": "About Section", "callback_data": f"settings#sb_about_{b_id}", "icon_custom_emoji_id": "6021625933759257863"}],
+          [{"text": "Menu Images", "callback_data": f"settings#sb_menu_mgr_{b_id}", "icon_custom_emoji_id": "5944753741512052670"}],
+          [{"text": "Back", "callback_data": f"settings#sb_view_{b_id}"}],
+      ]
+      text = (
+          f"<b>Welcome, About & Menu Settings</b>\n"
+          f"────────────────────\n"
+          f"<b>Bot:</b> {bot_name}\n\n"
+          f"Configure the visual branding and greeting messages for this delivery bot:\n\n"
+          f"• <b>Welcome Message:</b> Custom greeting sent when a user sends /start\n"
+          f"• <b>About Section:</b> Custom text, owner contact, and version details\n"
+          f"• <b>Menu Images:</b> Manage rotating banner images for the main menu\n"
+          f"────────────────────"
       )
+      await _send_or_edit_fast(query, text, buttons, api_buttons=api_buttons, bot=bot)
 
   elif type.startswith("sb_menu_mgr_"):
       b_id = type.split("sb_menu_mgr_")[1]
@@ -4331,31 +4356,32 @@ async def settings_query(bot, query):
       
       buttons = []
       buttons.append([
-          InlineKeyboardButton('➕ Aᴅᴅ Iᴍᴀɢᴇ', callback_data=f"settings#sb_menu_img_{b_id}"),
-          InlineKeyboardButton('👁 Pʀᴇᴠɪᴇᴡ', callback_data=f"settings#sb_menu_pre_{b_id}")
+          InlineKeyboardButton("Add Image", callback_data=f"settings#sb_menu_img_{b_id}"),
+          InlineKeyboardButton("Preview", callback_data=f"settings#sb_menu_pre_{b_id}")
       ])
       
       img_btns = []
       for idx, file_id in enumerate(images):
-          img_btns.append(InlineKeyboardButton(f'❌ Iᴍᴀɢᴇ {idx+1}', callback_data=f"settings#sb_menu_del_{b_id}_{idx}"))
+          img_btns.append(InlineKeyboardButton(f"Delete Image {idx+1}", callback_data=f"settings#sb_menu_del_{b_id}_{idx}"))
           if len(img_btns) == 2:
               buttons.append(img_btns)
               img_btns = []
       if img_btns:
           buttons.append(img_btns)
       
-      # Show clear-all button only when images exist
       if images:
-          buttons.append([InlineKeyboardButton('🗑 Rᴇᴍᴏᴠᴇ Aʟʟ Iᴍᴀɢᴇs', callback_data=f"settings#sb_menu_clr_{b_id}")])
+          buttons.append([InlineKeyboardButton("Remove All Images", callback_data=f"settings#sb_menu_clr_{b_id}")])
           
-      buttons.append([InlineKeyboardButton('❮ Bᴀᴄᴋ', callback_data=f"settings#sb_wa_{b_id}")])
+      buttons.append([InlineKeyboardButton("Back", callback_data=f"settings#sb_wa_{b_id}")])
       
-      await query.message.edit_text(
-          f"<b>❪ MENU IMAGES MANAGER ❫</b>\n\n"
-          f"You have <b>{len(images)}/10</b> images in rotation.\n"
-          f"These images will automatically rotate when a user starts your bot.",
-          reply_markup=InlineKeyboardMarkup(buttons)
+      text = (
+          f"<b>Menu Images Manager</b>\n"
+          f"────────────────────\n"
+          f"Active Images: <b>{len(images)}/10</b>\n\n"
+          f"These banner images rotate randomly when a user starts this delivery bot.\n"
+          f"────────────────────"
       )
+      await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
 
   elif type.startswith("sb_menu_del_"):
       b_id, _, idx = type.split("sb_menu_del_")[1].partition("_")
@@ -4375,7 +4401,7 @@ async def settings_query(bot, query):
       about = await db.get_share_bot_about(b_id)
       about['menu_image_ids'] = []
       await db.set_share_bot_about(b_id, about)
-      await query.answer("🗑 All menu images removed!", show_alert=False)
+      await query.answer("All menu images removed!", show_alert=False)
       query.data = f"settings#sb_menu_mgr_{b_id}"
       return await settings_query(bot, query)
 
@@ -4392,8 +4418,8 @@ async def settings_query(bot, query):
       await bot.send_photo(
           chat_id=user_id,
           photo=file_id,
-          caption="<b>👁 Preview of the rotating menu image.</b>",
-          reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('❮ Bᴀᴄᴋ Tᴏ Mᴀɴᴀɢᴇʀ', callback_data=f"settings#sb_menu_mgr_{b_id}")]])
+          caption="<b>Preview of the rotating menu image.</b>",
+          reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back to Manager", callback_data=f"settings#sb_menu_mgr_{b_id}")]])
       )
 
   elif type.startswith("sb_menu_img_"):
@@ -4401,8 +4427,8 @@ async def settings_query(bot, query):
       await query.message.delete()
       ask = await bot.send_message(
           user_id,
-          "<b>🖼 Set Menu Image</b>\n\n"
-          "Send a photo to use as the main Menu Image.\n"
+          "<b>Add Menu Image</b>\n\n"
+          "Send a photo or short video (<= 10s) to use as the main Menu Image.\n"
           "This image will appear above the Welcome and About menus.\n\n"
           "Send <code>/clear</code> to remove all images.\n"
           "Send <code>/cancel</code> to abort."
@@ -4413,8 +4439,8 @@ async def settings_query(bot, query):
           if getattr(resp, "text", None) and any(x in str(resp.text).lower() for x in ["cancel", "cᴀɴᴄᴇʟ", "⛔", "/cancel"]):
               await resp.delete()
               return await ask.edit_text(
-                  "<i>Process Cancelled Successfully!</i>",
-                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_menu_mgr_{b_id}")]])
+                  "<i>Process Cancelled!</i>",
+                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data=f"settings#sb_menu_mgr_{b_id}")]])
               )
 
           if resp.text and resp.text.strip() == "/clear":
@@ -4423,16 +4449,16 @@ async def settings_query(bot, query):
               await db.set_share_bot_about(b_id, about)
               await resp.delete()
               return await ask.edit_text(
-                  "»  Menu media removed.",
-                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_menu_mgr_{b_id}")]])
+                  "Menu media removed.",
+                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data=f"settings#sb_menu_mgr_{b_id}")]])
               )
 
           about = await db.get_share_bot_about(b_id)
           if len(about.get('menu_image_ids', [])) >= 10:
               await resp.delete()
               return await ask.edit_text(
-                  "<b>‣  Limit Reached:</b> You can only set up to 10 rotating menu items.\nSend <code>/clear</code> first to reset the list.",
-                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_menu_mgr_{b_id}")]])
+                  "<b>Limit Reached:</b> You can only set up to 10 rotating menu items.\nSend <code>/clear</code> first to reset the list.",
+                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data=f"settings#sb_menu_mgr_{b_id}")]])
               )
 
           media_obj = None
@@ -4450,8 +4476,8 @@ async def settings_query(bot, query):
           if not media_obj:
               await resp.delete()
               return await ask.edit_text(
-                  "‣  Unsupported media. Please send a Photo, GIF, or short Video (≤10s).",
-                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_menu_mgr_{b_id}")]])
+                  "Unsupported media. Please send a Photo, GIF, or short Video (<=10s).",
+                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data=f"settings#sb_menu_mgr_{b_id}")]])
               )
 
           final_file_id = media_obj.file_id
@@ -4464,65 +4490,51 @@ async def settings_query(bot, query):
           should_stop = False
 
           if not sb_client:
-              bot_info = next((bx for bx in await db.get_bots(user_id) if str(bx['id']) == b_id), None)
-              if bot_info:
-                  try:
-                      sb_client = _pyro.Client(name=f"tmp_{b_id}", bot_token=bot_info['token'], in_memory=True, api_id=Config.API_ID, api_hash=Config.API_HASH)
-                      await sb_client.start()
-                      should_stop = True
-                  except Exception:
-                      sb_client = None
+               bot_info = next((bx for bx in await db.get_bots(user_id) if str(bx['id']) == b_id), None)
+               if bot_info:
+                   try:
+                       sb_client = _pyro.Client(name=f"tmp_{b_id}", bot_token=bot_info['token'], in_memory=True, api_id=Config.API_ID, api_hash=Config.API_HASH)
+                       await sb_client.start()
+                       should_stop = True
+                   except Exception:
+                       sb_client = None
 
           if sb_client:
               dl_path = await bot.download_media(resp)
               if dl_path:
                   try:
                       if menu_media_type == 'animation':
-                          relay = await sb_client.send_animation(chat_id=user_id, animation=dl_path)
-                          final_file_id = relay.animation.file_id
+                          sent_m = await sb_client.send_animation(chat_id=user_id, animation=dl_path)
+                          final_file_id = sent_m.animation.file_id
                       elif menu_media_type == 'video':
-                          relay = await sb_client.send_video(chat_id=user_id, video=dl_path)
-                          final_file_id = relay.video.file_id
-                      else:
-                          relay = await sb_client.send_photo(chat_id=user_id, photo=dl_path)
-                          ph = relay.photo
-                          final_file_id = ph.file_id if hasattr(ph, 'file_id') else ph[-1].file_id
-                      try: await relay.delete()
+                          sent_m = await sb_client.send_video(chat_id=user_id, video=dl_path)
+                          final_file_id = sent_m.video.file_id
+                      elif menu_media_type == 'photo':
+                          sent_m = await sb_client.send_photo(chat_id=user_id, photo=dl_path)
+                          final_file_id = sent_m.photo.file_id
+                      try: await sent_m.delete()
                       except Exception: pass
-                  except Exception as _re:
-                      logger.warning(f"[MenuImg] relay failed: {_re}")
-                      final_file_id = None
-                      sb_err = str(_re)
-                  try: os.remove(dl_path)
-                  except Exception: pass
+                  except Exception as e:
+                      logger.error(f"[MenuManager] Error caching media on share bot client: {e}")
+                  finally:
+                      if os.path.exists(dl_path):
+                          try: os.remove(dl_path)
+                          except Exception: pass
+              if should_stop:
+                  await sb_client.stop()
 
-          if should_stop and sb_client:
-              try: await sb_client.stop()
-              except Exception: pass
-
-          if not final_file_id:
-               await ask.edit_text(
-                   f"<b>‣  ERROR:</b> The Delivery Bot failed to cache this media.\n\n"
-                   f"Please open your Delivery Bot (@{bot_info['username'] if 'bot_info' in locals() and bot_info else 'bot'}) and press <b>/start</b> before uploading a menu image. This is required so the bot can process the file.\n\n"
-                   f"<i>Error detail: {sb_err if 'sb_err' in locals() else 'Session failed to start'}</i>",
-                   reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_menu_mgr_{b_id}")]])
-               )
-               return
-
-          about = await db.get_share_bot_about(b_id)
-          about.setdefault('menu_image_ids', []).append({"file_id": final_file_id, "media_type": menu_media_type})
+          images = about.get('menu_image_ids', [])
+          images.append(final_file_id)
+          about['menu_image_ids'] = images
           await db.set_share_bot_about(b_id, about)
+
           await resp.delete()
-          type_icon = {"animation": "🎞", "video": "🎬", "photo": "🖼"}.get(menu_media_type, "🖼")
           await ask.edit_text(
-              f"»  ✅ {type_icon} Menu media saved! Type: <b>{menu_media_type}</b>",
-              reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_menu_mgr_{b_id}")]])
+              f"Menu image added successfully! Total in rotation: <b>{len(images)}/10</b>",
+              reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data=f"settings#sb_menu_mgr_{b_id}")]])
           )
       except asyncio.TimeoutError:
-          await ask.edit_text(
-              "Timeout.",
-              reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_menu_mgr_{b_id}")]])
-          )
+          await ask.edit_text("Timed out.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data=f"settings#sb_menu_mgr_{b_id}")]]))
 
   elif type.startswith("sb_fetch_media_"):
       b_id = type.split("sb_fetch_media_")[1]
@@ -4716,11 +4728,14 @@ async def settings_query(bot, query):
   elif type.startswith("sb_set_welcome_"):
       b_id = type.split("sb_set_welcome_")[1]
       await _sb_set_text_flow(bot, user_id, query, b_id, "welcome_msg",
-          "Wᴇʟᴄᴏᴍᴇ Mᴇssᴀɢᴇ",
-          "Send the new welcome message.\n"
-          "Use <code>{first_name}</code>, <code>{full_name}</code>, <code>{mention}</code> as placeholders.\n"
-          "Any font/formatting is accepted.",
-          f"settings#sb_view_{b_id}")
+          "Welcome Message",
+          "Send the new greeting message to be displayed when users start your bot.\n\n"
+          "<b>Supported Placeholders:</b>\n"
+          "• <code>{first_name}</code> - User's first name\n"
+          "• <code>{full_name}</code> - User's full name\n"
+          "• <code>{mention}</code> - User mention link\n\n"
+          "Standard HTML formatting is supported.",
+          f"settings#sb_wa_{b_id}")
 
   elif type.startswith("sb_set_delete_"):
       b_id = type.split("sb_set_delete_")[1]
@@ -5225,42 +5240,57 @@ async def settings_query(bot, query):
               pass
 
   #  About section editor 
+  #  About section editor 
   elif type.startswith("sb_about_") and not any(type.startswith(f"sb_about_{p}_") for p in ['img', 'txt', 'owner', 'ver', 'reset']):
       b_id = type.split("sb_about_")[1]
       bots = await db.get_share_bots()
       bt = next((x for x in bots if str(x['id']) == str(b_id)), None)
       if not bt: return await query.answer("Bot not found!")
       about = await db.get_share_bot_about(b_id)
-      txt_set = "»  Custom" if about.get('custom_text') else "»  Default"
+      txt_set = "Custom" if about.get('custom_text') else "Default"
       btns = [
-          [InlineKeyboardButton('Eᴅɪᴛ Aʙᴏᴜᴛ Tᴇxᴛ',   callback_data=f"settings#sb_about_txt_{b_id}")],
-          [InlineKeyboardButton('Eᴅɪᴛ Oᴡɴᴇʀ',         callback_data=f"settings#sb_about_owner_{b_id}")],
-          [InlineKeyboardButton('Eᴅɪᴛ Vᴇʀsɪᴏɴ',       callback_data=f"settings#sb_about_ver_{b_id}")],
-          [InlineKeyboardButton('Rᴇsᴇᴛ Tᴏ Dᴇꜰᴀᴜʟᴛ',    callback_data=f"settings#sb_about_reset_{b_id}")],
-          [InlineKeyboardButton('❮ Bᴀᴄᴋ',                callback_data=f"settings#sb_wa_{b_id}")],
+          [InlineKeyboardButton("Edit About Text", callback_data=f"settings#sb_about_txt_{b_id}")],
+          [
+              InlineKeyboardButton("Edit Owner", callback_data=f"settings#sb_about_owner_{b_id}"),
+              InlineKeyboardButton("Edit Version", callback_data=f"settings#sb_about_ver_{b_id}")
+          ],
+          [InlineKeyboardButton("Reset to Default", callback_data=f"settings#sb_about_reset_{b_id}")],
+          [InlineKeyboardButton("Back", callback_data=f"settings#sb_wa_{b_id}")],
       ]
-      await query.message.edit_text(
-          f"<b>‣  Aʙᴏᴜᴛ Sᴇᴄᴛɪᴏɴ — {bt['name']}</b>\n\n"
-          f"<b>Text:</b> {txt_set}\n"
-          f"<b>Owner:</b> {about.get('owner_name', 'JeetX')}\n"
-          f"<b>Version:</b> {about.get('version', 'V1.0')}\n\n"
-          "<i>The About section is shown when users tap the About button in the delivery bot.</i>",
-          reply_markup=InlineKeyboardMarkup(btns)
+      api_btns = [
+          [{"text": "Edit About Text", "callback_data": f"settings#sb_about_txt_{b_id}", "icon_custom_emoji_id": "6023843687367190257"}],
+          [
+              {"text": "Edit Owner", "callback_data": f"settings#sb_about_owner_{b_id}", "icon_custom_emoji_id": "6030400221232501136"},
+              {"text": "Edit Version", "callback_data": f"settings#sb_about_ver_{b_id}", "icon_custom_emoji_id": "6019151667524539757"}
+          ],
+          [{"text": "Reset to Default", "callback_data": f"settings#sb_about_reset_{b_id}", "icon_custom_emoji_id": "6021413766669801212"}],
+          [{"text": "Back", "callback_data": f"settings#sb_wa_{b_id}"}],
+      ]
+      text = (
+          f"<b>About Section Settings</b>\n"
+          f"────────────────────\n"
+          f"<b>Bot:</b> {bt['name']}\n\n"
+          f"• <b>About Text:</b> <code>{txt_set}</code>\n"
+          f"• <b>Owner:</b> <code>{about.get('owner_name', 'JeetX')}</code>\n"
+          f"• <b>Version:</b> <code>{about.get('version', 'V1.0')}</code>\n\n"
+          f"This info is shown when users tap the About button in the delivery bot.\n"
+          f"────────────────────"
       )
-
+      await _send_or_edit_fast(query, text, btns, api_buttons=api_btns, bot=bot)
 
   elif type.startswith("sb_about_txt_"):
       b_id = type.split("sb_about_txt_")[1]
       await query.message.delete()
       ask = await bot.send_message(user_id,
-          "<b>»  Send the custom About text</b>.\n"
-          "Use any font you like. HTML formatting is supported.\n"
+          "<b>Set About Text</b>\n\n"
+          "Send the custom text for the About section.\n"
+          "HTML formatting is supported.\n\n"
           "/cancel to abort."
       )
       try:
           resp = await _ask(bot, user_id, timeout=180)
           if getattr(resp, "text", None) and any(x in str(resp.text).lower() for x in ["cancel", "cᴀɴᴄᴇʟ", "⛔", "/cancel"]):
-              return await ask.edit_text("<i>Process Cancelled Successfully!</i>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_about_{b_id}")]]))
+              return await ask.edit_text("<i>Process Cancelled!</i>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data=f"settings#sb_about_{b_id}")]]))
           txt = ""
           if resp.text:
               txt = resp.text.html
@@ -5269,48 +5299,51 @@ async def settings_query(bot, query):
           about = await db.get_share_bot_about(b_id)
           about['custom_text'] = txt
           await db.set_share_bot_about(b_id, about)
-          await ask.edit_text("»  About text saved!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_about_{b_id}")]]))
+          await ask.edit_text("About text saved successfully!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data=f"settings#sb_about_{b_id}")]]))
       except asyncio.TimeoutError:
-          await ask.edit_text("Timeout.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_about_{b_id}")]]))
+          await ask.edit_text("Timed out.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data=f"settings#sb_about_{b_id}")]]))
 
   elif type.startswith("sb_about_owner_"):
       b_id = type.split("sb_about_owner_")[1]
       await query.message.delete()
       ask = await bot.send_message(user_id,
-          "<b>»  Send owner name and link</b>\n"
-          "Format: <code>Owner Name | https://t.me/username</code>\n"
+          "<b>Set Owner Info</b>\n\n"
+          "Send owner name and link.\n"
+          "Format: <code>Owner Name | https://t.me/username</code>\n\n"
           "/cancel to abort."
       )
       try:
           resp = await _ask(bot, user_id, timeout=120)
           if getattr(resp, "text", None) and any(x in str(resp.text).lower() for x in ["cancel", "cᴀɴᴄᴇʟ", "⛔", "/cancel"]):
-              return await ask.edit_text("<i>Process Cancelled Successfully!</i>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_about_{b_id}")]]))
+              return await ask.edit_text("<i>Process Cancelled!</i>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data=f"settings#sb_about_{b_id}")]]))
           parts = (resp.text or "").split("|", 1)
           about = await db.get_share_bot_about(b_id)
           about['owner_name'] = parts[0].strip()
           if len(parts) > 1:
               about['owner_link'] = parts[1].strip()
           await db.set_share_bot_about(b_id, about)
-          await ask.edit_text("»  Owner updated!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_about_{b_id}")]]))
+          await ask.edit_text("Owner updated successfully!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data=f"settings#sb_about_{b_id}")]]))
       except asyncio.TimeoutError:
-          await ask.edit_text("Timeout.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_about_{b_id}")]]))
+          await ask.edit_text("Timed out.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data=f"settings#sb_about_{b_id}")]]))
 
   elif type.startswith("sb_about_ver_"):
       b_id = type.split("sb_about_ver_")[1]
       await query.message.delete()
       ask = await bot.send_message(user_id,
-          "<b>»  Send new version string</b> (e.g. <code>V1.2</code>)\n/cancel to abort."
+          "<b>Set Version</b>\n\n"
+          "Send new version string (e.g. <code>V1.2</code>).\n\n"
+          "/cancel to abort."
       )
       try:
           resp = await _ask(bot, user_id, timeout=60)
           if getattr(resp, "text", None) and any(x in str(resp.text).lower() for x in ["cancel", "cᴀɴᴄᴇʟ", "⛔", "/cancel"]):
-              return await ask.edit_text("<i>Process Cancelled Successfully!</i>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_about_{b_id}")]]))
+              return await ask.edit_text("<i>Process Cancelled!</i>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data=f"settings#sb_about_{b_id}")]]))
           about = await db.get_share_bot_about(b_id)
           about['version'] = (resp.text or "V1.0").strip()
           await db.set_share_bot_about(b_id, about)
-          await ask.edit_text("»  Version updated!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_about_{b_id}")]]))
+          await ask.edit_text("Version updated successfully!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data=f"settings#sb_about_{b_id}")]]))
       except asyncio.TimeoutError:
-          await ask.edit_text("Timeout.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_about_{b_id}")]]))
+          await ask.edit_text("Timed out.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data=f"settings#sb_about_{b_id}")]]))
 
   elif type.startswith("sb_about_reset_"):
       b_id = type.split("sb_about_reset_")[1]
@@ -5319,7 +5352,6 @@ async def settings_query(bot, query):
       query.data = f"settings#sb_about_{b_id}"
       return await settings_query(bot, query)
 
-  #  Per-bot Force-Subscribe 
   elif type.startswith("sb_fsub_") and not any(type.startswith(f"sb_fsub_{p}_") for p in ['add', 'jr', 'del', 'msg', 'act', 'show', 'setshow', 'rot', 'setrot', 'rotcustom']):
       b_id = type.split("sb_fsub_")[1]
       fsub_chs = await db.get_bot_fsub_channels(b_id)

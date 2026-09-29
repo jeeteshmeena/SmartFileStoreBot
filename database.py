@@ -2986,14 +2986,25 @@ class Database:
         if b_str in self._store_cfg_cache:
             del self._store_cfg_cache[b_str]
 
-    async def is_store_bot_mode(self, bot_id: str) -> bool:
-        """Checks if a bot is running in Store Bot Mode."""
+    async def get_delivery_bot_mode(self, bot_id: str) -> str:
+        """Returns 'normal' (default) or 'pro'."""
         cfg = await self.get_store_bot_config(bot_id)
-        return cfg.get('is_store_mode', False)
+        mode = cfg.get('delivery_mode')
+        if mode in ('normal', 'pro'):
+            return mode
+        return 'normal'
+
+    async def set_delivery_bot_mode(self, bot_id: str, mode: str):
+        """Sets delivery bot mode to 'normal' or 'pro'."""
+        m = 'pro' if mode == 'pro' else 'normal'
+        await self.set_store_bot_config(bot_id, delivery_mode=m, is_store_mode=False)
+
+    async def is_store_bot_mode(self, bot_id: str) -> bool:
+        """Store bot mode has been wiped out/replaced by normal/pro modes."""
+        return False
 
     async def set_store_bot_mode(self, bot_id: str, is_store: bool):
-        """Sets bot mode to Store Bot or Normal Delivery."""
-        await self.set_store_bot_config(bot_id, is_store_mode=is_store)
+        await self.set_delivery_bot_mode(bot_id, 'pro' if is_store else 'normal')
 
 
     def __getattr__(self, name):

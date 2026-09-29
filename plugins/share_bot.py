@@ -260,9 +260,10 @@ def _sc(text: str) -> str:
     ))
 
 def _get_base_header(user) -> str:
-    # Only first name, no last name — used in non-welcome contexts (About, Help)
+    if not user:
+        return ""
     u_name = user.first_name or "User"
-    return f"›› ʜᴇʏ, <a href='tg://user?id={user.id}'>{u_name}</a>\n\n"
+    return f"Hey <a href='tg://user?id={user.id}'>{u_name}</a>,\n\n"
 
 def _get_welcome_text(user, bot_name, custom_wel=None, lang='en') -> str:
     if custom_wel:
@@ -270,27 +271,23 @@ def _get_welcome_text(user, bot_name, custom_wel=None, lang='en') -> str:
     first = user.first_name or "User"
     if lang == 'hi':
         return (
-            f"<blockquote expandable>›› ʜᴇʏ, <a href='tg://user?id={user.id}'>{first}</a><emoji id=\"6041919344995209164\">❣️</emoji></blockquote>\n"
-            f"<blockquote expandable><b>»  {bot_name} में आपका स्वागत है!</b></blockquote>\n"
-            f"<blockquote expandable>मैं एक फ़ाइल डिलीवरी बॉट हूँ। चैनल से किसी भी लिंक बटन पर टैप करें और मैं आपको फ़ाइलें सीधे यहाँ भेज दूंगा।</blockquote>\n"
-            f"<blockquote expandable>अधिक जानकारी के लिए सहायता पर क्लिक करें।</blockquote>"
+            f"<blockquote>Hey <a href='tg://user?id={user.id}'>{first}</a>!</blockquote>\n"
+            f"<blockquote><b>{bot_name} में आपका स्वागत है!</b></blockquote>\n"
+            f"<blockquote>मैं एक फ़ाइल डिलीवरी बॉट हूँ। चैनल में किसी भी लिंक बटन पर टैप करें और मैं आपको फ़ाइलें सीधे यहाँ भेज दूंगा।</blockquote>\n"
+            f"<blockquote>अधिक जानकारी के लिए सहायता पर क्लिक करें।</blockquote>"
         )
     if lang == 'hinglish':
         return (
-            f"<blockquote expandable>›› ʜᴇʏ, <a href='tg://user?id={user.id}'>{first}</a><emoji id=\"6041919344995209164\">❣️</emoji></blockquote>\n"
-            f"<blockquote expandable><b>»  {bot_name} me aapka swagat hai!</b></blockquote>\n"
-            f"<blockquote expandable>Main ek file delivery bot hoon. Channel me kisi bhi link button par tap karein aur main files directly aapko yahan bhej dunga.</blockquote>\n"
-            f"<blockquote expandable>Aur jankari ke liye Help par click karein.</blockquote>"
+            f"<blockquote>Hey <a href='tg://user?id={user.id}'>{first}</a>!</blockquote>\n"
+            f"<blockquote><b>{bot_name} me aapka swagat hai!</b></blockquote>\n"
+            f"<blockquote>Main ek file delivery bot hoon. Channel me kisi bhi link button par tap karein aur main files directly aapko yahan bhej dunga.</blockquote>\n"
+            f"<blockquote>Aur jankari ke liye Help par click karein.</blockquote>"
         )
     return (
-        # Block 1: Greeting with first name only
-        f"<blockquote expandable>›› ʜᴇʏ, <a href='tg://user?id={user.id}'>{first}</a><emoji id=\"6041919344995209164\">❣️</emoji></blockquote>\n"
-        # Block 2: Welcome line
-        f"<blockquote expandable><b>»  {_sc('Welcome to')} {bot_name}!</b></blockquote>\n"
-        # Block 3: Description
-        f"<blockquote expandable>{_sc('I am a file delivery bot. Tap any link button from the channel and I will send you the files directly here.')}</blockquote>\n"
-        # Block 4: Help hint
-        f"<blockquote expandable>{_sc('Click Help for more info.')}</blockquote>"
+        f"<blockquote>Hey <a href='tg://user?id={user.id}'>{first}</a>!</blockquote>\n"
+        f"<blockquote><b>Welcome to {bot_name}!</b></blockquote>\n"
+        f"<blockquote>I am a file delivery bot. Tap any link button from the channel and I will deliver the files directly to you here.</blockquote>\n"
+        f"<blockquote>Click Help for more info.</blockquote>"
     )
 
 
@@ -1407,6 +1404,10 @@ async def _process_start(client, message):
         ]
     ])
     try:
+        deliv_bot_mode = await db.get_delivery_bot_mode(bot_id) if bot_id else "normal"
+        if deliv_bot_mode != "pro":
+            return
+
         mode = await db.get_share_bot_text(bot_id, "post_delivery_mode") if bot_id else "random"
         if not mode:
             mode = "random"
@@ -1487,10 +1488,10 @@ async def _send_welcome(client, message, bot_id: str = None):
     bot_about = bot_about or {}
     welcome_img = random.choice(bot_about.get('menu_image_ids', [])) if bot_about and bot_about.get('menu_image_ids') else None
 
-    lbl_help = "सहायता" if is_hi else _sc("Help")
-    lbl_about = "बारे में" if is_hi else _sc("About")
+    lbl_help = "सहायता" if is_hi else "Help"
+    lbl_about = "बारे में" if is_hi else "About"
     lbl_pass = "पास सब्सक्रिप्शन" if is_hi else "Pass Subscription"
-    lbl_settings = "सेटिंग्स" if is_hi else _sc("Settings")
+    lbl_settings = "सेटिंग्स" if is_hi else "Settings"
 
     clone_link = (await db.get_share_bot_text(bot_id, "clone_link") if bot_id else "") or await db.get_share_clone_link()
     clone_link = (clone_link or "").strip()
@@ -1769,16 +1770,16 @@ async def _send_about(client, query_or_msg, bot_id: str = None, edit: bool = Tru
         # _sc() converts every ASCII char to Unicode small-caps, which destroys href URLs
         txt = (
             f"{_get_base_header(user)}"
-            f"<b>»  ᴀʙᴏᴜᴛ ᴍᴇ</b>\n\n"
-            f"<b>‣  ɴᴀᴍᴇ:</b>  {bot_name}\n"
-            f"<b>‣  ᴏᴘᴇʀᴀᴛᴇᴅ ʙʏ:</b>  Arya Bot\n"
-            f"<b>‣  ᴏᴡɴᴇʀ:</b>  <a href=\"{owner_link}\">{owner_name}</a>\n"
-            f"<b>‣  ᴜᴘᴅᴀᴛᴇꜱ:</b>  <a href=\"{update_link}\">{update_chan}</a>\n"
-            f"<b>‣  ꜱᴜᴘᴘᴏʀᴛ:</b>  <a href=\"{support_link}\">{support_chan}</a>\n"
-            f"<b>‣  ᴠᴇʀꜱɪᴏɴ:</b>  {version}"
+            f"<b>About {bot_name}</b>\n\n"
+            f"• <b>Name:</b> {bot_name}\n"
+            f"• <b>Role:</b> Smart File Store Delivery Bot\n"
+            f"• <b>Owner:</b> <a href=\"{owner_link}\">{owner_name}</a>\n"
+            f"• <b>Updates:</b> <a href=\"{update_link}\">{update_chan}</a>\n"
+            f"• <b>Support:</b> <a href=\"{support_link}\">{support_chan}</a>\n"
+            f"• <b>Version:</b> {version}"
         )
 
-    back_txt = "←︎ " + _sc("Back")
+    back_txt = "Back"
     buttons = [[InlineKeyboardButton(back_txt, callback_data="sbd#back", style="danger")]]
     markup  = InlineKeyboardMarkup(buttons)
     about_api_kb = [[{"text": back_txt, "callback_data": "sbd#back", "style": "danger"}]]
