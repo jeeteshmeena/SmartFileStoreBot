@@ -172,7 +172,7 @@ async def _sb_set_text_flow(bot, user_id, query, b_id: str, key: str,
         "/cancel to abort."
     )
     try:
-        resp = await bot.listen(chat_id=user_id, timeout=300)
+        resp = await _ask(bot, user_id, timeout=300)
         raw_txt = resp.text or resp.caption or ""
         if raw_txt.strip().lower() in ("/cancel", "cancel"):
             try: await resp.delete()
@@ -3249,7 +3249,7 @@ async def settings_query(bot, query):
               "Send the bot token from @BotFather directly, or forward a message containing it.\n\n"
               "/cancel to abort"
           )
-          resp = await bot.listen(chat_id=user_id, timeout=120)
+          resp = await _ask(bot, user_id, timeout=120)
           if getattr(resp, "text", None) and any(x in str(resp.text).lower() for x in ["cancel", "cᴀɴᴄᴇʟ", "⛔", "/cancel"]):
               await resp.delete()
               return await ask.edit_text(
@@ -4183,7 +4183,7 @@ async def settings_query(bot, query):
           reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_premium_ad_{b_id}")]])
       )
       try:
-          resp = await bot.listen(chat_id=user_id, timeout=180)
+          resp = await _ask(bot, user_id, timeout=180)
           if getattr(resp, 'text', None) and any(x in str(resp.text).lower() for x in ["cancel", "cᴀɴᴄᴇʟ", "⛔", "/cancel"]):
               try: await resp.delete()
               except: pass
@@ -4852,7 +4852,7 @@ async def settings_query(bot, query):
           "Send /cancel to abort."
       )
       try:
-          resp_text = await bot.listen(chat_id=user_id, timeout=120)
+          resp_text = await _ask(bot, user_id, timeout=120)
           btn_text = (resp_text.text or "").strip()
           if btn_text.lower() in ("cancel", "/cancel"):
               try: await resp_text.delete()
@@ -4871,7 +4871,7 @@ async def settings_query(bot, query):
               f"Send /cancel to abort."
           )
           
-          resp_url = await bot.listen(chat_id=user_id, timeout=120)
+          resp_url = await _ask(bot, user_id, timeout=120)
           btn_url = (resp_url.text or "").strip()
           if btn_url.lower() in ("cancel", "/cancel"):
               try: await resp_url.delete()
@@ -5258,7 +5258,7 @@ async def settings_query(bot, query):
           "/cancel to abort."
       )
       try:
-          resp = await bot.listen(chat_id=user_id, timeout=180)
+          resp = await _ask(bot, user_id, timeout=180)
           if getattr(resp, "text", None) and any(x in str(resp.text).lower() for x in ["cancel", "cᴀɴᴄᴇʟ", "⛔", "/cancel"]):
               return await ask.edit_text("<i>Process Cancelled Successfully!</i>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_about_{b_id}")]]))
           txt = ""
@@ -5282,7 +5282,7 @@ async def settings_query(bot, query):
           "/cancel to abort."
       )
       try:
-          resp = await bot.listen(chat_id=user_id, timeout=120)
+          resp = await _ask(bot, user_id, timeout=120)
           if getattr(resp, "text", None) and any(x in str(resp.text).lower() for x in ["cancel", "cᴀɴᴄᴇʟ", "⛔", "/cancel"]):
               return await ask.edit_text("<i>Process Cancelled Successfully!</i>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_about_{b_id}")]]))
           parts = (resp.text or "").split("|", 1)
@@ -5302,7 +5302,7 @@ async def settings_query(bot, query):
           "<b>»  Send new version string</b> (e.g. <code>V1.2</code>)\n/cancel to abort."
       )
       try:
-          resp = await bot.listen(chat_id=user_id, timeout=60)
+          resp = await _ask(bot, user_id, timeout=60)
           if getattr(resp, "text", None) and any(x in str(resp.text).lower() for x in ["cancel", "cᴀɴᴄᴇʟ", "⛔", "/cancel"]):
               return await ask.edit_text("<i>Process Cancelled Successfully!</i>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_about_{b_id}")]]))
           about = await db.get_share_bot_about(b_id)
@@ -5576,7 +5576,7 @@ async def settings_query(bot, query):
               "• <code>off</code> (disable rotation)\n\n"
               "Send <code>/cancel</code> to abort."
           )
-          resp = await bot.listen(chat_id=user_id, timeout=120)
+          resp = await _ask(bot, user_id, timeout=120)
           if getattr(resp, "text", None) and any(x in str(resp.text).lower() for x in ["cancel", "cᴀɴᴄᴇʟ", "⛔", "/cancel"]):
               try: await resp.delete()
               except Exception: pass
@@ -5674,7 +5674,7 @@ async def settings_query(bot, query):
               "<i>Tip: You can also forward any message from your private channel here!</i>\n\n"
               "/cancel to abort"
           )
-          resp = await bot.listen(chat_id=user_id, timeout=120)
+          resp = await _ask(bot, user_id, timeout=120)
           if getattr(resp, "text", None) and any(x in str(resp.text).lower() for x in ["cancel", "cᴀɴᴄᴇʟ", "⛔", "/cancel"]):
               try: await resp.delete()
               except Exception: pass
@@ -6021,7 +6021,7 @@ async def settings_query(bot, query):
              "<i>Tip: You can also forward any message from your private channel here!</i>\n\n"
              "/cancel to abort"
          )
-         resp = await bot.listen(chat_id=user_id, timeout=120)
+         resp = await _ask(bot, user_id, timeout=120)
          if getattr(resp, "text", None) and any(x in str(resp.text).lower() for x in ["cancel", "cᴀɴᴄᴇʟ", "⛔", "/cancel"]):
              await resp.delete()
              return await ask.edit_text("<i>Process Cancelled Successfully!</i>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="settings#sharefsub")]]))
@@ -6143,7 +6143,7 @@ async def settings_query(bot, query):
      await query.message.delete()
      try:
          txtmsg = await bot.send_message(user_id, "<b>Send the Bot Token for the File-Sharing Bot:</b>\n<i>(Get it from @BotFather)</i>\n\n/remove - to delete current token.\n/cancel - to abort.")
-         resp = await bot.listen(chat_id=user_id, timeout=120)
+         resp = await _ask(bot, user_id, timeout=120)
          if getattr(resp, 'text', None) and any(x in resp.text.lower() for x in ['cancel', 'cᴀɴᴄᴇʟ', '⛔']):
              await resp.delete()
              return await txtmsg.edit_text("<i>Process Cancelled Successfully!</i>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('❮ Bᴀᴄᴋ', callback_data='settings#sharebot')]]))
@@ -6341,7 +6341,7 @@ async def settings_query(bot, query):
      await query.message.delete()
      try:
          text = await bot.send_message(query.message.chat.id, "Send your custom caption\n/cancel - <code>cancel this process</code>")
-         caption = await bot.listen(chat_id=user_id, timeout=300)
+         caption = await _ask(bot, user_id, timeout=300)
          if getattr(caption, 'text', None) and any(x in caption.text.lower() for x in ['cancel', 'cᴀɴᴄᴇʟ', '⛔']):
             await caption.delete()
             return await text.edit_text(
@@ -6383,7 +6383,7 @@ async def settings_query(bot, query):
      await query.message.delete()
      try:
          txt = await bot.send_message(user_id, text="**Send your custom button.\n\nFORMAT:**\n`[forward bot][buttonurl:https://t.me/devgaganbot]`\n")
-         ask = await bot.listen(chat_id=user_id, timeout=300)
+         ask = await _ask(bot, user_id, timeout=300)
          button = parse_buttons(ask.text.html)
          if not button:
             await ask.delete()

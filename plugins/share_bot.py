@@ -577,6 +577,35 @@ async def check_all_subscriptions(client, user_id: int, fsub_channels: list, bot
 # Module-level handler functions (required for add_handler to work)
 # 
 
+_share_waiting: dict[tuple[int, int], asyncio.Future] = {}
+
+async def _share_input_router(client, message):
+    uid = message.from_user.id if message.from_user else None
+    bot_id = client.me.id if getattr(client, 'me', None) else 0
+    if uid and (bot_id, uid) in _share_waiting:
+        fut = _share_waiting.pop((bot_id, uid))
+        if not fut.done():
+            fut.set_result(message)
+            message.stop_propagation()
+            return
+
+async def _share_ask(client, user_id: int, timeout: int = 120):
+    loop = asyncio.get_event_loop()
+    fut: asyncio.Future = loop.create_future()
+    bot_id = client.me.id if getattr(client, 'me', None) else 0
+    key = (bot_id, user_id)
+    old = _share_waiting.pop(key, None)
+    if old and not old.done():
+        old.cancel()
+    _share_waiting[key] = fut
+    try:
+        from asyncio import wait_for, TimeoutError
+        res = await wait_for(fut, timeout=timeout)
+        return res
+    except TimeoutError:
+        _share_waiting.pop(key, None)
+        raise
+
 async def _fsub_record_jr(client, request):
     """
     Record that a user has sent a join request to a JR channel in persistent DB.
@@ -2061,7 +2090,7 @@ async def _process_delivery_button(client, query):
                 "/cancel to abort."
             )
             try:
-                resp = await client.listen(chat_id=uid, timeout=120)
+                resp = await _share_ask(client, uid, timeout=120)
                 txt = (resp.text or "").strip()
                 await resp.delete()
                 if txt.lower() in ("/cancel", "cancel"):
@@ -7230,6 +7259,7 @@ def register_share_handlers(app: Client):
     from plugins.banned import ban_interceptor
     app.add_handler(MessageHandler(ban_interceptor, filters.all), group=-999)
     app.add_handler(CallbackQueryHandler(ban_interceptor, filters.all), group=-999)
+    app.add_handler(MessageHandler(_share_input_router, filters.private), group=-16)
     
     app.add_handler(MessageHandler(
         _process_share_broadcast,
