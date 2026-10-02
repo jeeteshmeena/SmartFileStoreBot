@@ -75,19 +75,38 @@ async def _safe_edit(bot, query, **kwargs):
             return await bot.send_message(**kwargs)
 
 async def _main_buttons(user_id: int):
-    lang = await db.get_language(user_id)
-    lb_text = '• Batch Links •'
+    from plugins.settings import is_any_owner
+    is_admin = await is_any_owner(user_id) if user_id else False
 
-    return [
-        [
-            InlineKeyboardButton(_tx(lang, 'btn_settings'), callback_data='settings#main'),
-            InlineKeyboardButton(lb_text,                   callback_data='sl#start'),
-        ],
-        [
-            InlineKeyboardButton('• Status •',              callback_data='status'),
-            InlineKeyboardButton('• About •',               callback_data='about'),
-        ],
-    ]
+    if is_admin:
+        return [
+            [
+                InlineKeyboardButton('• Channels •', callback_data='settings#channels'),
+                InlineKeyboardButton('• Batch Links •', callback_data='sl#start'),
+            ],
+            [
+                InlineKeyboardButton('• Dlvr Bot Setup •', callback_data='settings#sharebot'),
+                InlineKeyboardButton('• Status •', callback_data='status'),
+            ],
+            [
+                InlineKeyboardButton('• About •', callback_data='about'),
+                InlineKeyboardButton('• Lang •', callback_data='settings#lang'),
+            ],
+        ]
+    else:
+        return [
+            [
+                InlineKeyboardButton('• Channels •', callback_data='settings#channels'),
+                InlineKeyboardButton('• Batch Links •', callback_data='sl#start'),
+            ],
+            [
+                InlineKeyboardButton('• Status •', callback_data='status'),
+                InlineKeyboardButton('• About •', callback_data='about'),
+            ],
+            [
+                InlineKeyboardButton('• Lang •', callback_data='settings#lang'),
+            ],
+        ]
 
 #  static fallback used before user_id is available 
 _STATIC_BUTTONS = [
@@ -96,18 +115,21 @@ _STATIC_BUTTONS = [
         InlineKeyboardButton('💬 Support Group', url='https://t.me/+1p2hcQ4ZaupjNjI1'),
     ],
     [
-        InlineKeyboardButton('• Settings •',     callback_data='settings#main'),
+        InlineKeyboardButton('• Channels •',     callback_data='settings#channels'),
         InlineKeyboardButton('• Batch Links •', callback_data='sl#start'),
     ],
     [
         InlineKeyboardButton('• Status •',       callback_data='status'),
         InlineKeyboardButton('• About •',        callback_data='about'),
     ],
+    [
+        InlineKeyboardButton('• Lang •',         callback_data='settings#lang'),
+    ],
 ]
 
 # ===================Start Function===================
 
-@Client.on_message(filters.private & filters.command(['start']))
+@Client.on_message(filters.private & filters.command(['start', 'settings', 'menu']))
 async def start(client, message):
     try:
         user = message.from_user

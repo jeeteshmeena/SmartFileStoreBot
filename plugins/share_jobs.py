@@ -587,7 +587,7 @@ async def sl_callback(bot, query):
         kb = [
             [InlineKeyboardButton("Complete Mode (One-Time)", callback_data="sl#complete", style="primary")],
             [InlineKeyboardButton("Live Auto-Batch (Ongoing)", callback_data="lb#main", style="success")],
-            [InlineKeyboardButton("Close", callback_data="close_btn", style="danger")]
+            [InlineKeyboardButton("← Back", callback_data="back", style="danger")]
         ]
         await query.message.edit_text(
             "<b>Batch Links</b>\n"

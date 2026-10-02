@@ -518,7 +518,7 @@ def _lang_keyboard(current_lang: str) -> InlineKeyboardMarkup:
             InlineKeyboardButton(f"{mark('hinglish')}»  Hinglish", callback_data="setlang#hinglish"),
         ],
         [
-            InlineKeyboardButton("Bᴀᴄᴋ Tᴏ Sᴇᴛᴛɪɴɢs",             callback_data="settings#main"),
+            InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="settings#main"),
         ]
     ])
 

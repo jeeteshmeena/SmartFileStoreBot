@@ -206,13 +206,10 @@ async def _sb_set_text_flow(bot, user_id, query, b_id: str, key: str,
     except asyncio.TimeoutError:
         await ask.edit_text("Timed out.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data=back_cb)]]))
 
+@Client.on_message(filters.private & filters.command(['settings', 'menu']))
 async def settings(client, message):
-    await message.delete()
-    user_id = message.from_user.id
-    await message.reply_text(
-        await t(user_id, 'settings_title'),
-        reply_markup=await main_buttons(user_id)
-    )
+    from plugins.commands import start
+    return await start(client, message)
 
 
 def is_owner(user_id: int) -> bool:
@@ -629,27 +626,9 @@ async def settings_query(bot, query):
   buttons = [[InlineKeyboardButton('❮ Bᴀᴄᴋ', callback_data="settings#main")]]
   
   if type=="main":
-     user_id = query.from_user.id
-     text = await t(user_id, 'settings_title')
-     markup = await main_buttons(user_id)
-     msg = query.message
-     is_media = bool(getattr(msg, "photo", None) or getattr(msg, "animation", None) or getattr(msg, "video", None) or getattr(msg, "document", None))
-     if is_media:
-         try:
-             await msg.delete()
-         except Exception:
-             pass
-         await bot.send_message(chat_id=msg.chat.id, text=text, reply_markup=markup)
-     else:
-         try:
-             await msg.edit_text(text, reply_markup=markup)
-         except Exception:
-             try:
-                 await msg.delete()
-             except Exception:
-                 pass
-             await bot.send_message(chat_id=msg.chat.id, text=text, reply_markup=markup)
-          
+     from plugins.commands import back
+     return await back(bot, query)
+  
   elif type=="stats":
      # Find active Live Jobs (which forward messages) for all accounts of this user
      running_jobs = [j async for j in db.db["live_batch_jobs"].find({"user_id": user_id, "status": "running"})]
@@ -6482,15 +6461,9 @@ async def settings_query(bot, query):
         "**Successfully your database url deleted**",
         reply_markup=InlineKeyboardMarkup(buttons))
       
-  elif type=="filters":
-     await query.message.edit_text(
-        "<b><u>💠 CUSTOM FILTERS 💠</b></u>\n\n**configure the type of messages which you want forward**",
-        reply_markup=await filters_buttons(user_id))
+  elif type in ("filters", "nextfilters"):
+     return await query.answer("This setting has been removed.", show_alert=True)
   
-  elif type=="nextfilters":
-     await query.edit_message_reply_markup( 
-        reply_markup=await next_filters_buttons(user_id))
-   
   elif type.startswith("updatefilter"):
      i, key, value = type.split('-')
      
@@ -6623,40 +6596,39 @@ async def settings_query(bot, query):
 
 
 async def main_buttons(user_id=None):
-  menu_image_id = None
-  if user_id:
-      try:
-          data = await get_configs(user_id)
-          menu_image_id = data.get('menu_image_id')
-      except Exception:
-          pass
+    is_admin = await is_any_owner(user_id) if user_id else False
 
-  is_admin = await is_any_owner(user_id)
+    if is_admin:
+        buttons = [
+            [
+                InlineKeyboardButton('• Channels •', callback_data='settings#channels'),
+                InlineKeyboardButton('• Batch Links •', callback_data='sl#start'),
+            ],
+            [
+                InlineKeyboardButton('• Dlvr Bot Setup •', callback_data='settings#sharebot'),
+                InlineKeyboardButton('• Status •', callback_data='status'),
+            ],
+            [
+                InlineKeyboardButton('• About •', callback_data='about'),
+                InlineKeyboardButton('• Lang •', callback_data='settings#lang'),
+            ],
+        ]
+    else:
+        buttons = [
+            [
+                InlineKeyboardButton('• Channels •', callback_data='settings#channels'),
+                InlineKeyboardButton('• Batch Links •', callback_data='sl#start'),
+            ],
+            [
+                InlineKeyboardButton('• Status •', callback_data='status'),
+                InlineKeyboardButton('• About •', callback_data='about'),
+            ],
+            [
+                InlineKeyboardButton('• Lang •', callback_data='settings#lang'),
+            ],
+        ]
 
-  buttons = [
-      [
-          InlineKeyboardButton('• Channels •', callback_data='settings#channels'),
-          InlineKeyboardButton('• Filters •', callback_data='settings#filters')
-      ],
-      [
-          InlineKeyboardButton('• Ex Settings •', callback_data='settings#nextfilters')
-      ]
-  ]
-  if is_admin:
-      buttons.append([
-          InlineKeyboardButton('• Dlvr Bot Setup •', callback_data='settings#sharebot'),
-          InlineKeyboardButton('• Stats •', callback_data='settings#stats')
-      ])
-  else:
-      buttons.append([
-          InlineKeyboardButton('• Stats •', callback_data='settings#stats')
-      ])
-  buttons.append([
-      InlineKeyboardButton('• Lang •', callback_data='settings#lang')
-  ])
-  buttons.append([InlineKeyboardButton('❮ Bᴀᴄᴋ', callback_data='back')])
-
-  return InlineKeyboardMarkup(buttons)
+    return InlineKeyboardMarkup(buttons)
 
 
 
